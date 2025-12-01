@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Lock, Key, Shield, Terminal, LogOut } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { AlertCircle, CheckCircle, Lock, Key, Shield, Terminal, LogOut, MessageSquare } from 'lucide-react';
+import { KeyExchange, generateLongTermKeyPair, exportPublicKey } from './security/secureKeyExchange.js';
 
 // --- CONFIGURATION ---
 const API_URL = "http://localhost:5000/api";
@@ -10,7 +11,7 @@ const STORE_NAME = "key_store";
 
 const openDB = () => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2);
+    const request = indexedDB.open(DB_NAME, 3);
     request.onerror = (event) => reject(new Error(`Error opening DB: ${event.target.error}`));
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = (e) => {
@@ -41,6 +42,33 @@ const getPrivateKey = async (userId) => {
     const request = store.get(userId);
     request.onsuccess = () => resolve(request.result ? request.result.key : null);
     request.onerror = () => reject("Error retrieving key");
+  });
+};
+
+// Store Ed25519 signing keys (for key exchange protocol)
+const storeSigningKeys = async (userId, signingKeys) => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.get(userId).onsuccess = (e) => {
+      const existing = e.target.result || { userId };
+      existing.signingKeys = signingKeys; // {privateKey, publicKey}
+      const request = store.put(existing);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject("Error storing signing keys");
+    };
+  });
+};
+
+const getSigningKeys = async (userId) => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get(userId);
+    request.onsuccess = () => resolve(request.result?.signingKeys || null);
+    request.onerror = () => reject("Error retrieving signing keys");
   });
 };
 
@@ -142,6 +170,10 @@ export default function App() {
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [keyExchangeStatus, setKeyExchangeStatus] = useState(null); // {peerId, status, sessionKey}
+  const [keyExchangeMessages, setKeyExchangeMessages] = useState([]);
+  const activeKeyExchanges = useRef(new Map()); // Map<peerId, KeyExchange instance>
+  const processedMessageIds = useRef(new Set()); // Track processed message IDs to avoid duplicates
 
   // NEW: Check for existing session on page load
   useEffect(() => {
@@ -185,19 +217,306 @@ export default function App() {
     }
   };
 
-  // Fetch a specific user's public key (for your group members to use in Part 4)
-  const fetchUserPublicKey = async (username) => {
+  // Fetch a specific user's public keys (RSA and Ed25519)
+  const fetchUserPublicKeys = async (username) => {
     if (!user) return null;
     try {
       const res = await fetch(`${API_URL}/users/${username}/public-key`, {
         headers: { Authorization: `Bearer ${user.token}` }
       });
       const data = await res.json();
-      if (res.ok) return data.publicKey;
+      if (res.ok) return {
+        rsaPublicKey: data.publicKey,
+        signingPublicKey: data.signingPublicKey
+      };
       return null;
     } catch (err) {
       console.error("Fetch public key failed", err);
       return null;
+    }
+  };
+
+  // Fetch key exchange messages
+  const fetchKeyExchangeMessages = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_URL}/key-exchange/messages`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const messages = data.messages || [];
+        setKeyExchangeMessages(messages);
+        
+        // Only process messages if we don't have established sessions for those peers
+        const messagesToProcess = messages.filter(msg => {
+          // Skip if we already have an established session with this peer
+          if (keyExchangeStatus && keyExchangeStatus.peerId === msg.from && keyExchangeStatus.status === 'established') {
+            return false;
+          }
+          return true;
+        });
+        
+        // Process any pending messages
+        for (const msg of messagesToProcess) {
+          await processKeyExchangeMessage(msg);
+        }
+      }
+    } catch (err) {
+      console.error("Fetch key exchange messages failed", err);
+    }
+  };
+
+  // Process incoming key exchange message
+  const processKeyExchangeMessage = async (msg) => {
+    // Skip if already processed
+    if (processedMessageIds.current.has(msg.messageId)) {
+      return;
+    }
+
+    // Skip if we already have an established session with this peer
+    if (keyExchangeStatus && keyExchangeStatus.peerId === msg.from && keyExchangeStatus.status === 'established') {
+      console.log(`[${user.username}] Session already established with ${msg.from}, deleting message ${msg.messageId}`);
+      // Delete the message to clean up
+      try {
+        await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+        processedMessageIds.current.add(msg.messageId);
+      } catch (e) {
+        // Ignore delete errors
+      }
+      return;
+    }
+
+    // Mark as processing
+    processedMessageIds.current.add(msg.messageId);
+
+    try {
+      const signingKeys = await getSigningKeys(user.username);
+      if (!signingKeys) {
+        console.error("Signing keys not found");
+        return;
+      }
+
+      const peerKeys = await fetchUserPublicKeys(msg.from);
+      if (!peerKeys) {
+        console.error("Peer keys not found");
+        return;
+      }
+
+      // Determine if this is an init or response message
+      const messageData = typeof msg.message === 'string' ? JSON.parse(msg.message) : msg.message;
+
+      if (messageData.type === 'init') {
+        // We received an init message, create a response
+        // Extract init fields (remove 'type' field)
+        const { type, ...initMessage } = messageData;
+        const keyExchange = new KeyExchange(user.username, signingKeys);
+        const response = await keyExchange.createResponseMessage(initMessage, peerKeys.signingPublicKey);
+        
+        // Send response back
+        const messageId = `response-${Date.now()}-${Math.random()}`;
+        await fetch(`${API_URL}/key-exchange/send`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${user.token}`
+          },
+          body: JSON.stringify({
+            to: msg.from,
+            message: { type: 'response', ...response },
+            messageId
+          })
+        });
+
+        // Delete the processed message
+        await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+
+        logSecurityEvent("KEY_EXCHANGE_RESPONSE", `Responded to key exchange from ${msg.from}`, user.token);
+        
+        // Mark as processed
+        processedMessageIds.current.add(msg.messageId);
+      } else if (messageData.type === 'response') {
+        // We received a response, finalize the session
+        console.log("Processing response message from:", msg.from);
+        console.log("Active key exchanges:", Array.from(activeKeyExchanges.current.keys()));
+        console.log("Current keyExchangeStatus:", keyExchangeStatus);
+        
+        const keyExchange = activeKeyExchanges.current.get(msg.from);
+        console.log("Found keyExchange:", !!keyExchange);
+        
+        if (keyExchange && keyExchangeStatus && keyExchangeStatus.peerId === msg.from && keyExchangeStatus.status === 'init_sent') {
+          try {
+            console.log("Finalizing session with peer:", msg.from);
+            // Extract response fields (remove 'type' field)
+            const { type, ...responseMessage } = messageData;
+            const sessionKey = await keyExchange.finalizeSession(responseMessage, peerKeys.signingPublicKey);
+            
+            // Store session key (in production, you'd encrypt and store this securely)
+            // For now, we'll just mark as established
+            setKeyExchangeStatus({
+              peerId: msg.from,
+              status: 'established',
+              sessionKey: sessionKey
+            });
+
+            // Clean up the key exchange instance
+            activeKeyExchanges.current.delete(msg.from);
+
+            logSecurityEvent("KEY_EXCHANGE_SUCCESS", `Key exchange established with ${msg.from}`, user.token);
+            alert(`Secure session established with ${msg.from}! Session key derived.`);
+            
+            // Delete the processed message
+            await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${user.token}` }
+            });
+          } catch (err) {
+            logSecurityEvent("KEY_EXCHANGE_FINALIZE_ERROR", `Error finalizing key exchange: ${err.message}`, user.token);
+            console.error("Error finalizing key exchange:", err);
+            activeKeyExchanges.current.delete(msg.from);
+            // Remove from processed set so we can retry
+            processedMessageIds.current.delete(msg.messageId);
+          }
+        } else {
+          console.error("Key exchange state check failed:", {
+            hasKeyExchange: !!keyExchange,
+            keyExchangeStatus: keyExchangeStatus,
+            expectedPeerId: msg.from,
+            statusMatches: keyExchangeStatus?.status === 'init_sent',
+            peerIdMatches: keyExchangeStatus?.peerId === msg.from
+          });
+          
+          // Try to recover: if we have the keyExchange but state is wrong, try to finalize anyway
+          if (keyExchange) {
+            try {
+              console.log("Attempting to recover key exchange state...");
+              const { type, ...responseMessage } = messageData;
+              const sessionKey = await keyExchange.finalizeSession(responseMessage, peerKeys.signingPublicKey);
+              
+              setKeyExchangeStatus({
+                peerId: msg.from,
+                status: 'established',
+                sessionKey: sessionKey
+              });
+              
+              activeKeyExchanges.current.delete(msg.from);
+              logSecurityEvent("KEY_EXCHANGE_SUCCESS", `Key exchange established with ${msg.from} (recovered)`, user.token);
+              alert(`Secure session established with ${msg.from}! Session key derived.`);
+              
+              // Delete the processed message
+              await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${user.token}` }
+              });
+            } catch (recoverErr) {
+              console.error("Recovery failed:", recoverErr);
+              logSecurityEvent("KEY_EXCHANGE_STATE_LOST", `Key exchange state lost for ${msg.from} - please re-initiate`, user.token);
+              // Remove from processed set so we can retry
+              processedMessageIds.current.delete(msg.messageId);
+            }
+          } else {
+            logSecurityEvent("KEY_EXCHANGE_STATE_LOST", `Key exchange state lost for ${msg.from} - please re-initiate`, user.token);
+            // Delete the message since we can't process it
+            await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${user.token}` }
+            });
+          }
+        }
+      }
+    } catch (err) {
+      // Remove from processed set on error so we can retry
+      processedMessageIds.current.delete(msg.messageId);
+      console.error("Error processing key exchange message:", err);
+      logSecurityEvent("KEY_EXCHANGE_ERROR", `Error processing message: ${err.message}`, user.token);
+    }
+  };
+
+  // Initiate key exchange with a peer
+  const initiateKeyExchange = async (peerUsername) => {
+    if (!user) return;
+    
+    // Prevent self-exchange
+    if (peerUsername === user.username) {
+      setError("Cannot initiate key exchange with yourself");
+      return;
+    }
+    
+    setLoading(true);
+    setError('');
+
+    try {
+      // Get our signing keys
+      const signingKeys = await getSigningKeys(user.username);
+      if (!signingKeys) {
+        throw new Error("Signing keys not found. Please re-register.");
+      }
+
+      // Get peer's public keys
+      const peerKeys = await fetchUserPublicKeys(peerUsername);
+      if (!peerKeys) {
+        throw new Error("Could not fetch peer's public keys. The user may not exist.");
+      }
+      if (!peerKeys.signingPublicKey) {
+        throw new Error("The selected user has not completed key setup. They need to re-register to enable key exchange.");
+      }
+
+      // Create key exchange instance
+      const keyExchange = new KeyExchange(user.username, signingKeys);
+      const initMessage = await keyExchange.createInitMessage();
+      
+      // Validate init message structure
+      if (!initMessage.id || !initMessage.ephPub || !initMessage.nonce || !initMessage.signature) {
+        throw new Error("Failed to create valid key exchange message");
+      }
+
+      // Send init message
+      const messageId = `init-${Date.now()}-${Math.random()}`;
+      const res = await fetch(`${API_URL}/key-exchange/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
+        },
+        body: JSON.stringify({
+          to: peerUsername,
+          message: { type: 'init', ...initMessage },
+          messageId
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
+        throw new Error(errorData.message || `Failed to send key exchange message (${res.status})`);
+      }
+
+      // Store key exchange instance in ref BEFORE setting state
+      activeKeyExchanges.current.set(peerUsername, keyExchange);
+      console.log("Stored key exchange for:", peerUsername, "Active exchanges:", Array.from(activeKeyExchanges.current.keys()));
+      
+      // Store key exchange state
+      setKeyExchangeStatus({
+        peerId: peerUsername,
+        status: 'init_sent'
+      });
+      
+      // Immediately check for any pending response messages
+      setTimeout(() => fetchKeyExchangeMessages(), 500);
+
+      logSecurityEvent("KEY_EXCHANGE_INIT", `Initiated key exchange with ${peerUsername}`, user.token);
+      alert("Key exchange initiated! Waiting for response...");
+
+    } catch (err) {
+      setError(err.message);
+      logSecurityEvent("KEY_EXCHANGE_INIT_FAIL", `Failed to initiate key exchange: ${err.message}`, user.token);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -206,8 +525,13 @@ export default function App() {
       checkKeyStatus();
       fetchLogs();
       fetchUsers();
-      const interval = setInterval(fetchLogs, 5000); // Poll for logs
-      return () => clearInterval(interval);
+      fetchKeyExchangeMessages();
+      const logInterval = setInterval(fetchLogs, 5000); // Poll for logs
+      const keyExchangeInterval = setInterval(fetchKeyExchangeMessages, 1000); // Poll for key exchange messages every 1 second
+      return () => {
+        clearInterval(logInterval);
+        clearInterval(keyExchangeInterval);
+      };
     }
   }, [view, user]);
 
@@ -257,18 +581,23 @@ export default function App() {
     setError('');
 
     try {
-      // 1. Generate Keys Client-Side
+      // 1. Generate RSA-OAEP Key Pair (for encryption/decryption)
       const keyPair = await generateKeyPair();
       const publicKeyJwk = await exportKey(keyPair.publicKey);
 
-      // 2. Register User + Public Key on Server
+      // 2. Generate Ed25519 Signing Key Pair (for key exchange protocol)
+      const signingKeyPair = await generateLongTermKeyPair();
+      const signingPublicKeyJwk = await exportPublicKey(signingKeyPair.publicKey);
+
+      // 3. Register User + Public Keys on Server
       const res = await fetch(`${API_URL}/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: formData.username,
           password: formData.password,
-          publicKey: publicKeyJwk
+          publicKey: publicKeyJwk, // RSA public key
+          signingPublicKey: signingPublicKeyJwk // Ed25519 public key
         })
       });
       
@@ -276,13 +605,17 @@ export default function App() {
       
       if (!res.ok) throw new Error(data.message || 'Registration failed');
 
-      // 3. Store Private Key Securely in IndexedDB (NEVER sent to server)
+      // 4. Store Private Keys Securely in IndexedDB (NEVER sent to server)
       await storePrivateKey(formData.username, keyPair.privateKey);
+      await storeSigningKeys(formData.username, {
+        privateKey: signingKeyPair.privateKey,
+        publicKey: signingKeyPair.publicKey
+      });
 
-      // 4. Log success
+      // 5. Log success
       // Note: In a real app, you might auto-login here.
       setView('login');
-      alert("Registration successful! Private key stored securely.");
+      alert("Registration successful! Private keys stored securely.");
 
     } catch (err) {
       setError(err.message);
@@ -314,11 +647,12 @@ export default function App() {
       
       setUser(userData);
       
-      // Verify Private Key Existence
+      // Verify Private Keys Existence
       const privKey = await getPrivateKey(formData.username);
-      if (!privKey) {
-        logSecurityEvent("KEY_WARNING", "User logged in but private key missing from device", data.token);
-        alert("Warning: This is a new device. You cannot decrypt old messages without your private key.");
+      const signingKeys = await getSigningKeys(formData.username);
+      if (!privKey || !signingKeys) {
+        logSecurityEvent("KEY_WARNING", "User logged in but private keys missing from device", data.token);
+        alert("Warning: This is a new device. You cannot use key exchange without your signing keys. Please re-register if needed.");
       }
 
       setView('dashboard');
@@ -411,17 +745,25 @@ export default function App() {
             <div className="mt-4 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
               <div className="text-xs font-semibold text-blue-700 mb-1">Selected User</div>
               <div className="font-medium text-gray-800">{selectedUser.username}</div>
-              <button 
-                onClick={async () => {
-                  const pubKey = await fetchUserPublicKey(selectedUser.username);
-                  if (pubKey) {
-                    console.log('Public Key:', pubKey);
-                  }
-                }}
-                className="mt-2 w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors"
-              >
-                Chat (E2EE)
-              </button>
+              <div className="mt-2 space-y-2">
+                <button 
+                  onClick={() => initiateKeyExchange(selectedUser.username)}
+                  disabled={loading || (keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username)}
+                  className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-xs font-medium rounded transition-colors flex items-center justify-center gap-2"
+                >
+                  <MessageSquare size={14} />
+                  {keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username 
+                    ? 'Key Exchange In Progress...' 
+                    : 'Initiate Key Exchange'}
+                </button>
+                {keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username && (
+                  <div className="text-xs text-gray-600 mt-1">
+                    Status: {keyExchangeStatus.status === 'init_sent' ? 'Waiting for response...' : 
+                            keyExchangeStatus.status === 'established' ? 'Session established!' : 
+                            keyExchangeStatus.status}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -440,8 +782,12 @@ export default function App() {
                 <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">IndexedDB</span>
               </div>
               <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-medium text-gray-600">Algorithm</span>
+                <span className="text-sm font-medium text-gray-600">RSA Key</span>
                 <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded">RSA-OAEP 2048</span>
+              </div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-gray-600">Signing Key</span>
+                <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded">Ed25519</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm font-medium text-gray-600">Private Key Status</span>
@@ -457,7 +803,7 @@ export default function App() {
               </div>
             </div>
             <p className="text-xs text-gray-400">
-              Your private key never leaves this device. It was generated using the Web Crypto API and is stored in a sandboxed database within your browser.
+              Your private keys (RSA-OAEP and Ed25519) never leave this device. They were generated using the Web Crypto API and are stored in a sandboxed database within your browser.
             </p>
           </div>
         </div>
