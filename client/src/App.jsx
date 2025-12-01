@@ -403,7 +403,6 @@ export default function App() {
                 onClick={async () => {
                   const pubKey = await fetchUserPublicKey(selectedUser.username);
                   if (pubKey) {
-                    alert(`Public key fetched for ${selectedUser.username}!\n\nThis will be used by your group members in Part 4 for encryption.`);
                     console.log('Public Key:', pubKey);
                   }
                 }}
