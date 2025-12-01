@@ -176,4 +176,52 @@ app.get('/api/logs', async (req, res) => {
     }
 });
 
+// 5. GET ALL REGISTERED USERS (For User Directory)
+app.get('/api/users', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+
+        // Fetch all users except the requesting user
+        const users = await User.find(
+            { username: { $ne: decoded.username } },
+            { username: 1, createdAt: 1, _id: 1 }
+        ).sort({ username: 1 });
+
+        await createLog(req, 'USER_DIRECTORY_ACCESS', `User ${decoded.username} accessed user directory`, decoded.username, 'info');
+        
+        res.json(users);
+    } catch (e) {
+        res.sendStatus(403);
+    }
+});
+
+// 6. GET SPECIFIC USER'S PUBLIC KEY (For Key Exchange)
+app.get('/api/users/:username/public-key', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const targetUsername = req.params.username;
+
+        const targetUser = await User.findOne({ username: targetUsername }, { publicKey: 1, username: 1 });
+        
+        if (!targetUser) {
+            await createLog(req, 'KEY_FETCH_FAIL', `User ${decoded.username} requested key for non-existent user: ${targetUsername}`, decoded.username, 'warning');
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        await createLog(req, 'KEY_FETCH_SUCCESS', `User ${decoded.username} fetched public key for ${targetUsername}`, decoded.username, 'info');
+        
+        res.json({ username: targetUser.username, publicKey: targetUser.publicKey });
+    } catch (e) {
+        res.sendStatus(403);
+    }
+});
+
 app.listen(PORT, () => console.log(`Secure Server running on port ${PORT}`));

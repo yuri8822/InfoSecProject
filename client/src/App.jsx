@@ -66,6 +66,8 @@ export default function App() {
   const [user, setUser] = useState(null); // { token, username, userId }
   const [keyStatus, setKeyStatus] = useState('checking'); // checking, generated, missing
   const [logs, setLogs] = useState([]);
+  const [users, setUsers] = useState([]); // List of all registered users
+  const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -97,10 +99,41 @@ export default function App() {
     }
   };
 
+  // Fetch registered users
+  const fetchUsers = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_URL}/users`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      const data = await res.json();
+      if (res.ok) setUsers(data);
+    } catch (err) {
+      console.error("Fetch users failed", err);
+    }
+  };
+
+  // Fetch a specific user's public key (for your group members to use in Part 4)
+  const fetchUserPublicKey = async (username) => {
+    if (!user) return null;
+    try {
+      const res = await fetch(`${API_URL}/users/${username}/public-key`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      const data = await res.json();
+      if (res.ok) return data.publicKey;
+      return null;
+    } catch (err) {
+      console.error("Fetch public key failed", err);
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (view === 'dashboard') {
       checkKeyStatus();
       fetchLogs();
+      fetchUsers();
       const interval = setInterval(fetchLogs, 5000); // Poll for logs
       return () => clearInterval(interval);
     }
@@ -321,7 +354,67 @@ export default function App() {
         </button>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* User Directory Panel */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Shield className="text-blue-500" />
+              <h3 className="text-lg font-semibold text-gray-800">Registered Users</h3>
+            </div>
+            <button onClick={fetchUsers} className="text-xs text-blue-600 hover:underline">Refresh</button>
+          </div>
+          
+          <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+            {users.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-8">No other users found</div>
+            ) : (
+              users.map((u) => (
+                <div 
+                  key={u._id}
+                  onClick={() => setSelectedUser(u)}
+                  className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                    selectedUser?._id === u._id 
+                      ? 'bg-blue-50 border-blue-300 shadow-sm' 
+                      : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm">
+                      {u.username[0].toUpperCase()}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-800">{u.username}</div>
+                      <div className="text-xs text-gray-400">
+                        Joined {new Date(u.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {selectedUser && (
+            <div className="mt-4 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+              <div className="text-xs font-semibold text-blue-700 mb-1">Selected User</div>
+              <div className="font-medium text-gray-800">{selectedUser.username}</div>
+              <button 
+                onClick={async () => {
+                  const pubKey = await fetchUserPublicKey(selectedUser.username);
+                  if (pubKey) {
+                    alert(`Public key fetched for ${selectedUser.username}!\n\nThis will be used by your group members in Part 4 for encryption.`);
+                    console.log('Public Key:', pubKey);
+                  }
+                }}
+                className="mt-2 w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors"
+              >
+                Chat (E2EE)
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Key Management Panel */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-center gap-2 mb-4">
