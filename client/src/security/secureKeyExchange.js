@@ -1,11 +1,7 @@
 // [3] secureKeyExchange.js - Browser-compatible Web Crypto API version
 
-// Key Pair Utility Functions.
+// Key pair utilities for long-term signing keys.
 
-/**
- * Generate Ed25519 signing key pair using Web Crypto API
- * @returns {Promise<CryptoKeyPair>} {privateKey, publicKey}
- */
 async function generateLongTermKeyPair() {
   return await window.crypto.subtle.generateKey(
     {
@@ -16,12 +12,7 @@ async function generateLongTermKeyPair() {
   );
 }
 
-/**
- * Sign data with Ed25519 private key
- * @param {CryptoKey} privateKey - Ed25519 private key
- * @param {Uint8Array|ArrayBuffer} data - Data to sign
- * @returns {Promise<ArrayBuffer>} Signature
- */
+// Sign data with our Ed25519 private key.
 async function signData(privateKey, data) {
   const dataBuffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
   return await window.crypto.subtle.sign(
@@ -33,13 +24,7 @@ async function signData(privateKey, data) {
   );
 }
 
-/**
- * Verify Ed25519 signature
- * @param {CryptoKey} publicKey - Ed25519 public key
- * @param {Uint8Array|ArrayBuffer} data - Original data
- * @param {Uint8Array|ArrayBuffer} signature - Signature to verify
- * @returns {Promise<boolean>} True if signature is valid
- */
+// Verify an Ed25519 signature.
 async function verifySignature(publicKey, data, signature) {
   const dataBuffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
   const sigBuffer = signature instanceof ArrayBuffer ? signature : new Uint8Array(signature).buffer;
@@ -53,12 +38,8 @@ async function verifySignature(publicKey, data, signature) {
   );
 }
 
-// Ephemeral Elliptic Curve Diffie-Hellman (ECDH) Utilities.
+// Ephemeral ECDH utilities for key exchange.
 
-/**
- * Generate X25519 ephemeral key pair
- * @returns {Promise<CryptoKeyPair>} {privateKey, publicKey}
- */
 async function generateEphemeralECDH() {
   return await window.crypto.subtle.generateKey(
     {
@@ -69,12 +50,7 @@ async function generateEphemeralECDH() {
   );
 }
 
-/**
- * Compute shared secret from X25519 key pair and peer public key
- * @param {CryptoKeyPair} keyPair - Our X25519 key pair
- * @param {CryptoKey} peerPublicKey - Peer's X25519 public key
- * @returns {Promise<ArrayBuffer>} Shared secret (32 bytes)
- */
+// Compute the shared secret using our ephemeral key and peer's public key.
 async function computeSharedSecret(keyPair, peerPublicKey) {
   return await window.crypto.subtle.deriveBits(
     {
@@ -86,17 +62,10 @@ async function computeSharedSecret(keyPair, peerPublicKey) {
   );
 }
 
-// HKDF Key Derivation.
+// HKDF key derivation for session keys.
 
-/**
- * Derive session key using HKDF
- * @param {ArrayBuffer} sharedSecret - Shared secret from ECDH
- * @param {Uint8Array|ArrayBuffer} salt - Salt for HKDF
- * @param {string} info - Info string for HKDF
- * @returns {Promise<ArrayBuffer>} Derived 32-byte session key
- */
 async function deriveSessionKey(sharedSecret, salt, info) {
-  // Import shared secret as a key for HKDF
+  // Import the shared secret so we can use it with HKDF.
   const baseKey = await window.crypto.subtle.importKey(
     "raw",
     sharedSecret,
@@ -111,7 +80,7 @@ async function deriveSessionKey(sharedSecret, salt, info) {
   const saltBuffer = salt instanceof ArrayBuffer ? salt : new Uint8Array(salt).buffer;
   const infoBuffer = new TextEncoder().encode(info);
 
-  // Derive key using HKDF
+  // Derive the 32-byte session key.
   return await window.crypto.subtle.deriveBits(
     {
       name: "HKDF",
@@ -124,18 +93,10 @@ async function deriveSessionKey(sharedSecret, salt, info) {
   );
 }
 
-// Key Confirmation.
+// Key confirmation using HMAC.
 
-/**
- * Compute HMAC for key confirmation
- * @param {ArrayBuffer} sessionKey - Session key
- * @param {string} label - Label for key confirmation
- * @param {Uint8Array|ArrayBuffer} transcriptHash - Hash of transcript
- * @param {string} clientId - Client ID
- * @returns {Promise<ArrayBuffer>} HMAC digest
- */
 async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientId) {
-  // Import session key as HMAC key
+  // Import the session key as an HMAC key.
   const hmacKey = await window.crypto.subtle.importKey(
     "raw",
     sessionKey,
@@ -147,7 +108,7 @@ async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientI
     ["sign"]
   );
 
-  // Concatenate inputs
+  // Concatenate all the inputs.
   const labelBytes = new TextEncoder().encode(label);
   const transcriptHashBuffer = transcriptHash instanceof ArrayBuffer 
     ? new Uint8Array(transcriptHash) 
@@ -159,7 +120,7 @@ async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientI
   data.set(transcriptHashBuffer, labelBytes.length);
   data.set(clientIdBytes, labelBytes.length + transcriptHashBuffer.length);
 
-  // Compute HMAC
+  // Compute and return the HMAC.
   return await window.crypto.subtle.sign(
     {
       name: "HMAC"
@@ -169,19 +130,11 @@ async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientI
   );
 }
 
-/**
- * Verify key confirmation HMAC
- * @param {ArrayBuffer} sessionKey - Session key
- * @param {string} label - Label for key confirmation
- * @param {Uint8Array|ArrayBuffer} transcriptHash - Hash of transcript
- * @param {string} clientId - Client ID
- * @param {Uint8Array|ArrayBuffer} receivedKC - Received key confirmation
- * @returns {Promise<boolean>} True if key confirmation is valid
- */
+// Verify a key confirmation HMAC from the peer.
 async function verifyKeyConfirmation(sessionKey, label, transcriptHash, clientId, receivedKC) {
   const expected = await computeKeyConfirmation(sessionKey, label, transcriptHash, clientId);
   
-  // Timing-safe comparison
+  // Use timing-safe comparison to prevent timing attacks.
   const expectedArray = new Uint8Array(expected);
   const receivedArray = receivedKC instanceof ArrayBuffer 
     ? new Uint8Array(receivedKC) 
@@ -198,19 +151,14 @@ async function verifyKeyConfirmation(sessionKey, label, transcriptHash, clientId
   return result === 0;
 }
 
-// Hash Utility.
+// Hash utility functions.
 
-/**
- * Hash data using SHA-256
- * @param {Uint8Array|ArrayBuffer} data - Data to hash
- * @returns {Promise<ArrayBuffer>} Hash digest
- */
 async function hashData(data) {
   const dataBuffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
   return await window.crypto.subtle.digest("SHA-256", dataBuffer);
 }
 
-// Helper function to convert ArrayBuffer to base64 for JSON serialization
+// Convert ArrayBuffer to base64 string for JSON serialization.
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
@@ -220,7 +168,7 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-// Helper function to convert base64 to ArrayBuffer
+// Convert base64 string back to ArrayBuffer.
 function base64ToArrayBuffer(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -230,12 +178,12 @@ function base64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
-// Helper function to export public key to JWK format
+// Export a public key to JWK format.
 async function exportPublicKey(publicKey) {
   return await window.crypto.subtle.exportKey("jwk", publicKey);
 }
 
-// Helper function to import public key from JWK format
+// Import a public key from JWK format.
 async function importPublicKey(jwk) {
   return await window.crypto.subtle.importKey(
     "jwk",
@@ -248,7 +196,7 @@ async function importPublicKey(jwk) {
   );
 }
 
-// Helper function to import X25519 public key from raw bytes
+// Import an X25519 public key from raw bytes.
 async function importX25519PublicKey(rawKey) {
   return await window.crypto.subtle.importKey(
     "raw",
@@ -261,53 +209,48 @@ async function importX25519PublicKey(rawKey) {
   );
 }
 
-// Custom Key Exchange Protocol Module.
+// Custom key exchange protocol implementation.
 
 class KeyExchange {
   constructor(clientId, longTermKeys) {
     this.clientId = clientId;
-    this.longTermKeys = longTermKeys; // {privateKey, publicKey} - Ed25519 keys
-    this.ephemeral = null; // Will be set when generateEphemeral is called
-    this.nonce = null; // Will be set when generateNonce is called
+    this.longTermKeys = longTermKeys; // Ed25519 keys: {privateKey, publicKey}
+    this.ephemeral = null; // Generated when needed
+    this.nonce = null; // Generated when needed
     this.peerId = null;
     this.peerEphemeral = null;
     this.peerNonce = null;
     this.sessionKey = null;
   }
 
-  /**
-   * Generate ephemeral key pair and nonce (call before createInitMessage)
-   */
+  // Generate ephemeral key pair and nonce. Call this before createInitMessage.
   async generateEphemeral() {
     this.ephemeral = await generateEphemeralECDH();
     this.nonce = new Uint8Array(16);
     window.crypto.getRandomValues(this.nonce);
   }
 
-  /**
-   * Create initialization message to start key exchange
-   * @returns {Promise<Object>} Init message with id, ephPub, nonce, signature
-   */
+  // Create the init message to start key exchange.
   async createInitMessage() {
     if (!this.ephemeral || !this.nonce) {
       await this.generateEphemeral();
     }
 
-    // Get ephemeral public key as raw bytes
+    // Get our ephemeral public key as raw bytes.
     const ephPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ephPubArray = new Uint8Array(ephPubKey);
 
-    // Concatenate: clientId + ephemeral public key + nonce
+    // Build the message: clientId + ephemeral public key + nonce.
     const clientIdBytes = new TextEncoder().encode(this.clientId);
     const message = new Uint8Array(clientIdBytes.length + ephPubArray.length + this.nonce.length);
     message.set(clientIdBytes, 0);
     message.set(ephPubArray, clientIdBytes.length);
     message.set(this.nonce, clientIdBytes.length + ephPubArray.length);
 
-    // Sign the message
+    // Sign it with our long-term private key.
     const signature = await signData(this.longTermKeys.privateKey, message.buffer);
 
-    // Export ephemeral public key as base64 for JSON
+    // Return everything as base64 strings for JSON.
     return {
       id: this.clientId,
       ephPub: arrayBufferToBase64(ephPubKey),
@@ -316,56 +259,48 @@ class KeyExchange {
     };
   }
 
-  /**
-   * Process received initialization message
-   * @param {Object} msg - Init message from peer
-   * @param {Object} peerPublicKeyJwk - Peer's Ed25519 public key in JWK format
-   */
+  // Process and verify a received init message from the peer.
   async processInitMessage(msg, peerPublicKeyJwk) {
-    // Import peer's public key
+    // Import the peer's public key.
     const peerPublicKey = await importPublicKey(peerPublicKeyJwk);
 
-    // Convert base64 strings back to ArrayBuffers
+    // Convert base64 strings back to ArrayBuffers.
     const ephPubBuffer = base64ToArrayBuffer(msg.ephPub);
     const nonceBuffer = base64ToArrayBuffer(msg.nonce);
     const signatureBuffer = base64ToArrayBuffer(msg.signature);
 
-    // Reconstruct the message that was signed
+    // Reconstruct the exact message that was signed.
     const clientIdBytes = new TextEncoder().encode(msg.id);
     const message = new Uint8Array(clientIdBytes.length + ephPubBuffer.byteLength + nonceBuffer.byteLength);
     message.set(clientIdBytes, 0);
     message.set(new Uint8Array(ephPubBuffer), clientIdBytes.length);
     message.set(new Uint8Array(nonceBuffer), clientIdBytes.length + ephPubBuffer.byteLength);
 
-    // Verify signature
+    // Verify the signature.
     const verify = await verifySignature(peerPublicKey, message.buffer, signatureBuffer);
     if (!verify) throw new Error("Invalid signature from peer");
 
+    // Store the peer's info for later.
     this.peerId = msg.id;
-    this.peerEphemeral = ephPubBuffer; // Store as ArrayBuffer for later use
+    this.peerEphemeral = ephPubBuffer;
     this.peerNonce = new Uint8Array(nonceBuffer);
   }
 
-  /**
-   * Create response message after receiving init message
-   * @param {Object} peerInitMessage - Peer's init message
-   * @param {Object} peerPublicKeyJwk - Peer's Ed25519 public key in JWK format
-   * @returns {Promise<Object>} Response message
-   */
+  // Create a response message after receiving the peer's init message.
   async createResponseMessage(peerInitMessage, peerPublicKeyJwk) {
-    // Process and verify peer's init message
+    // First, process and verify the peer's init message.
     await this.processInitMessage(peerInitMessage, peerPublicKeyJwk);
 
-    // Generate our ephemeral if not already done
+    // Generate our own ephemeral key if we haven't already.
     if (!this.ephemeral || !this.nonce) {
       await this.generateEphemeral();
     }
 
-    // Get our ephemeral public key
+    // Get our ephemeral public key.
     const ephPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ephPubArray = new Uint8Array(ephPubKey);
 
-    // Concatenate: clientId + our ephPub + our nonce + peer ephPub + peer nonce
+    // Build the message: clientId + our ephPub + our nonce + peer ephPub + peer nonce.
     const clientIdBytes = new TextEncoder().encode(this.clientId);
     const message = new Uint8Array(
       clientIdBytes.length + 
@@ -385,7 +320,7 @@ class KeyExchange {
     offset += this.peerEphemeral.byteLength;
     message.set(this.peerNonce, offset);
 
-    // Sign the message
+    // Sign it with our long-term private key.
     const signature = await signData(this.longTermKeys.privateKey, message.buffer);
 
     return {
@@ -396,26 +331,21 @@ class KeyExchange {
     };
   }
 
-  /**
-   * Finalize session after receiving response message
-   * @param {Object} peerResponseMessage - Peer's response message
-   * @param {Object} peerPublicKeyJwk - Peer's Ed25519 public key in JWK format
-   * @returns {Promise<ArrayBuffer>} Session key
-   */
+  // Finalize the session after receiving the peer's response message.
   async finalizeSession(peerResponseMessage, peerPublicKeyJwk) {
-    // Import peer's public key
+    // Import the peer's public key.
     const peerPublicKey = await importPublicKey(peerPublicKeyJwk);
 
-    // Convert base64 to ArrayBuffers
+    // Convert base64 strings back to ArrayBuffers.
     const peerEphPubBuffer = base64ToArrayBuffer(peerResponseMessage.ephPub);
     const peerNonceBuffer = base64ToArrayBuffer(peerResponseMessage.nonce);
     const signatureBuffer = base64ToArrayBuffer(peerResponseMessage.signature);
 
-    // Get our ephemeral public key
+    // Get our ephemeral public key.
     const ourEphPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ourEphPubArray = new Uint8Array(ourEphPubKey);
 
-    // Reconstruct the message that was signed
+    // Reconstruct the exact message that was signed.
     const peerIdBytes = new TextEncoder().encode(peerResponseMessage.id);
     const message = new Uint8Array(
       peerIdBytes.length + 
@@ -435,21 +365,21 @@ class KeyExchange {
     offset += ourEphPubArray.length;
     message.set(this.nonce, offset);
 
-    // Verify signature
+    // Verify the signature.
     const verify = await verifySignature(peerPublicKey, message.buffer, signatureBuffer);
     if (!verify) throw new Error("Invalid signature from peer");
 
-    // Store peer's ephemeral and nonce
+    // Store the peer's ephemeral key and nonce.
     this.peerEphemeral = peerEphPubBuffer;
     this.peerNonce = new Uint8Array(peerNonceBuffer);
 
-    // Import peer's ephemeral public key for ECDH
+    // Import the peer's ephemeral public key so we can do ECDH.
     const peerEphPubKey = await importX25519PublicKey(peerEphPubBuffer);
 
-    // Compute shared secret
+    // Compute the shared secret using ECDH.
     const sharedSecret = await computeSharedSecret(this.ephemeral, peerEphPubKey);
 
-    // Derive session key
+    // Derive the session key using HKDF.
     const salt = await hashData(
       new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
     );
@@ -465,11 +395,7 @@ class KeyExchange {
     return this.sessionKey;
   }
 
-  /**
-   * Create key confirmation HMAC
-   * @param {string} label - Label (e.g., "client" or "server")
-   * @returns {Promise<ArrayBuffer>} Key confirmation HMAC
-   */
+  // Create a key confirmation HMAC to prove we have the session key.
   async createKeyConfirmation(label) {
     if (!this.sessionKey) throw new Error("Session key not established");
 
@@ -485,13 +411,7 @@ class KeyExchange {
     return await computeKeyConfirmation(this.sessionKey, label, transcriptHash, this.clientId);
   }
 
-  /**
-   * Verify key confirmation from peer
-   * @param {string} label - Label used by peer
-   * @param {Uint8Array|ArrayBuffer} receivedKC - Received key confirmation
-   * @param {string} peerId - Peer's ID
-   * @returns {Promise<boolean>} True if key confirmation is valid
-   */
+  // Verify a key confirmation HMAC from the peer.
   async verifyKeyConfirmation(label, receivedKC, peerId) {
     if (!this.sessionKey) throw new Error("Session key not established");
 
@@ -512,16 +432,13 @@ class KeyExchange {
     return await verifyKeyConfirmation(this.sessionKey, label, transcriptHash, peerId, kcBuffer);
   }
 
-  /**
-   * Get the established session key
-   * @returns {ArrayBuffer|null} Session key or null if not established
-   */
+  // Get the established session key, or null if not established yet.
   getSessionKey() {
     return this.sessionKey;
   }
 }
 
-// Export Module (ES6)
+// Export the module.
 export { 
   KeyExchange,
   generateLongTermKeyPair,
