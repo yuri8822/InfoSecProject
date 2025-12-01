@@ -60,6 +60,78 @@ const logSecurityEvent = async (type, details, token = null) => {
   }
 };
 
+// AuthForm component moved outside to prevent recreation on each render
+const AuthForm = ({ type, formData, setFormData, error, setError, setView, handleLogin, handleRegister, loading }) => (
+  <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-lg border border-gray-100">
+    <div className="text-center">
+      <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-4">
+        <Shield className="w-6 h-6 text-blue-600" />
+      </div>
+      <h2 className="text-2xl font-bold text-gray-900">
+        {type === 'login' ? 'Secure Login' : 'Generate Identity'}
+      </h2>
+      <p className="mt-2 text-sm text-gray-500">
+        {type === 'login' 
+          ? 'Authenticate to access your secure vault' 
+          : 'Register to generate your unique RSA-2048 Keypair'}
+      </p>
+    </div>
+
+    {error && (
+      <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg flex items-center gap-2">
+        <AlertCircle size={16} />
+        {error}
+      </div>
+    )}
+
+    <form onSubmit={type === 'login' ? handleLogin : handleRegister} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700">Username</label>
+        <input
+          type="text"
+          required
+          className="w-full px-4 py-2 mt-1 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+          value={formData.username}
+          onChange={(e) => {
+            const value = e.target.value;
+            setFormData(prev => ({...prev, username: value}));
+          }}
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700">Password</label>
+        <input
+          type="password"
+          required
+          className="w-full px-4 py-2 mt-1 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+          value={formData.password}
+          onChange={(e) => {
+            const value = e.target.value;
+            setFormData(prev => ({...prev, password: value}));
+          }}
+        />
+      </div>
+      
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
+      >
+        {loading ? "Processing..." : (type === 'login' ? "Sign In" : "Generate Keys & Register")}
+        {!loading && type !== 'login' && <Key size={16} />}
+      </button>
+    </form>
+
+    <div className="text-center text-sm text-gray-500">
+      {type === 'login' ? (
+        <p>Need an identity? <button onClick={() => {setError(''); setView('register')}} className="text-blue-600 font-medium hover:underline">Create one</button></p>
+      ) : (
+        <p>Already have keys? <button onClick={() => {setError(''); setView('login')}} className="text-blue-600 font-medium hover:underline">Sign in</button></p>
+      )}
+    </div>
+  </div>
+);
+
 export default function App() {
   const [view, setView] = useState('login'); // login, register, dashboard
   const [formData, setFormData] = useState({ username: '', password: '' });
@@ -270,71 +342,6 @@ export default function App() {
 
   // --- UI COMPONENTS ---
 
-  const AuthForm = ({ type }) => (
-    <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-lg border border-gray-100">
-      <div className="text-center">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-4">
-          <Shield className="w-6 h-6 text-blue-600" />
-        </div>
-        <h2 className="text-2xl font-bold text-gray-900">
-          {type === 'login' ? 'Secure Login' : 'Generate Identity'}
-        </h2>
-        <p className="mt-2 text-sm text-gray-500">
-          {type === 'login' 
-            ? 'Authenticate to access your secure vault' 
-            : 'Register to generate your unique RSA-2048 Keypair'}
-        </p>
-      </div>
-
-      {error && (
-        <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg flex items-center gap-2">
-          <AlertCircle size={16} />
-          {error}
-        </div>
-      )}
-
-      <form onSubmit={type === 'login' ? handleLogin : handleRegister} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700">Username</label>
-          <input
-            type="text"
-            required
-            className="w-full px-4 py-2 mt-1 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-            value={formData.username}
-            onChange={(e) => setFormData({...formData, username: e.target.value})}
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700">Password</label>
-          <input
-            type="password"
-            required
-            className="w-full px-4 py-2 mt-1 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-            value={formData.password}
-            onChange={(e) => setFormData({...formData, password: e.target.value})}
-          />
-        </div>
-        
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
-        >
-          {loading ? "Processing..." : (type === 'login' ? "Sign In" : "Generate Keys & Register")}
-          {!loading && type !== 'login' && <Key size={16} />}
-        </button>
-      </form>
-
-      <div className="text-center text-sm text-gray-500">
-        {type === 'login' ? (
-          <p>Need an identity? <button onClick={() => {setError(''); setView('register')}} className="text-blue-600 font-medium hover:underline">Create one</button></p>
-        ) : (
-          <p>Already have keys? <button onClick={() => {setError(''); setView('login')}} className="text-blue-600 font-medium hover:underline">Sign in</button></p>
-        )}
-      </div>
-    </div>
-  );
-
   const Dashboard = () => (
     <div className="w-full max-w-5xl space-y-6">
       <header className="flex items-center justify-between bg-white p-6 rounded-xl shadow-sm border border-gray-100">
@@ -491,8 +498,32 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      {view === 'login' && <AuthForm type="login" />}
-      {view === 'register' && <AuthForm type="register" />}
+      {view === 'login' && (
+        <AuthForm 
+          type="login" 
+          formData={formData}
+          setFormData={setFormData}
+          error={error}
+          setError={setError}
+          setView={setView}
+          handleLogin={handleLogin}
+          handleRegister={handleRegister}
+          loading={loading}
+        />
+      )}
+      {view === 'register' && (
+        <AuthForm 
+          type="register" 
+          formData={formData}
+          setFormData={setFormData}
+          error={error}
+          setError={setError}
+          setView={setView}
+          handleLogin={handleLogin}
+          handleRegister={handleRegister}
+          loading={loading}
+        />
+      )}
       {view === 'dashboard' && <Dashboard />}
     </div>
   );
