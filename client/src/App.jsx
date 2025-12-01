@@ -10,8 +10,8 @@ const STORE_NAME = "key_store";
 
 const openDB = () => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onerror = () => reject("Error opening DB");
+    const request = indexedDB.open(DB_NAME, 2);
+    request.onerror = (event) => reject(new Error(`Error opening DB: ${event.target.error}`));
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
@@ -168,8 +168,13 @@ export default function App() {
 
   const checkKeyStatus = async () => {
     if (!user) return;
-    const privKey = await getPrivateKey(user.username);
-    setKeyStatus(privKey ? 'present' : 'missing');
+    try {
+      const privKey = await getPrivateKey(user.username);
+      setKeyStatus(privKey ? 'present' : 'missing');
+    } catch (err) {
+      console.error('Error checking key status:', err);
+      setKeyStatus('missing');
+    }
   };
 
   // --- AUTH HANDLERS ---
