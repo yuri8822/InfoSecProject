@@ -301,6 +301,149 @@ All code clearly commented with:
 
 ---
 
+## 🚨 Replay Attack Protection - IMPLEMENTATION SUMMARY
+
+### ✅ 1. Nonces (One-Time Numbers) - IMPLEMENTED
+
+**What it does:** Each message gets a unique 128-bit random number that cannot be reused
+
+**Implementation:**
+- **Generation:** `client/src/utils/crypto.js:203`
+  ```javascript
+  export const generateNonce = () => {
+    const nonce = window.crypto.getRandomValues(new Uint8Array(16));
+    return arrayBufferToBase64(nonce);
+  };
+  ```
+- **Server Check:** `server/routes.js:199`
+  ```javascript
+  const existingMessage = await Message.findOne({ from: decoded.username, to, nonce });
+  if (existingMessage) {
+    return res.status(400).json({ message: "Replay attack detected: duplicate nonce" });
+  }
+  ```
+
+**Protection:** Attacker cannot replay exact message (nonce will be duplicate)
+
+---
+
+### ✅ 2. Sequence Numbers - IMPLEMENTED
+
+**What it does:** Messages must arrive in strict increasing order (0, 1, 2, 3...)
+
+**Implementation:**
+- **Client Tracking:** `client/src/components/ChatWindow.jsx:112`
+  ```javascript
+  const [sequenceNumber, setSequenceNumber] = useState(0);
+  // After send: setSequenceNumber(prev => prev + 1);
+  ```
+- **Server Validation:** `server/routes.js:206`
+  ```javascript
+  const lastMessage = await Message.findOne({ from: decoded.username, to })
+    .sort({ sequenceNumber: -1 });
+  if (lastMessage && sequenceNumber <= lastMessage.sequenceNumber) {
+    return res.status(400).json({ message: "Replay attack detected: invalid sequence" });
+  }
+  ```
+
+**Protection:** Out-of-order or duplicate sequence numbers are rejected
+
+---
+
+### ✅ 3. Timestamps - IMPLEMENTED
+
+**What it does:** Messages must be within 5 minutes of server time (freshness check)
+
+**Implementation:**
+- **Client:** `client/src/components/ChatWindow.jsx:231`
+  ```javascript
+  timestamp: new Date().toISOString()
+  ```
+- **Server Validation:** `server/routes.js:212`
+  ```javascript
+  const messageAge = Date.now() - new Date(req.body.timestamp).getTime();
+  if (messageAge > 5 * 60 * 1000) {
+    return res.status(400).json({ message: "Message timestamp too old" });
+  }
+  ```
+
+**Protection:** Old captured messages (even 10 minutes old) are rejected
+
+---
+
+### ✅ 4. Verification Logic - IMPLEMENTED
+
+**What it does:** Server performs ALL 4 checks before accepting message
+
+**Implementation:** `server/routes.js:184-230`
+
+Multi-layer enforcement:
+1. Check nonce uniqueness
+2. Check sequence increasing
+3. Check timestamp freshness
+4. Store only if all pass
+
+**Protection:** All 4 mechanisms work together - bypassing one doesn't help
+
+---
+
+### ✅ 5. Attack Demonstrations - IMPLEMENTED
+
+**File:** `client/src/components/ReplayAttackDemo.jsx` (442 lines)
+
+4 interactive attack scenarios:
+1. **Attack #1: Duplicate Nonce** - Replays exact message → **BLOCKED** by nonce check
+2. **Attack #2: Sequence Regression** - Sends lower seq number → **BLOCKED** by sequence check
+3. **Attack #3: Timestamp Manipulation** - Old timestamp (10 min old) → **BLOCKED** by freshness check
+4. **Attack #4: Sequence Collision** - Same seq, different content → **BLOCKED** by sequence check
+
+**Access via UI:**
+- Log in → Dashboard → Click "Replay Demo" button
+- Select attack scenario
+- View live test results and technical details
+
+---
+
+### ✅ 6. Documentation - IMPLEMENTED
+
+**3 comprehensive guides provided:**
+
+1. **HOW_TO_ACHIEVE_REPLAY_PROTECTION.md** (280+ lines)
+   - Quick start guide
+   - Step-by-step demonstrations
+   - Code walkthroughs
+   - Customization instructions
+
+2. **REPLAY_ATTACK_PROTECTION.md** (400+ lines)
+   - Technical specifications
+   - Cryptographic details
+   - Architecture diagrams
+   - Security analysis
+   - Production recommendations
+
+3. **REPLAY_ATTACK_TEST_REPORT.md** (500+ lines)
+   - Implementation verification
+   - Attack flow diagrams
+   - Expected vs actual results
+   - Performance metrics
+   - Audit log samples
+
+---
+
+## Success Criteria - ALL MET ✅
+
+| Requirement | Status | Evidence |
+|-----------|--------|----------|
+| **Nonces** | ✅ Complete | `generateNonce()` + server validation |
+| **Sequence Numbers** | ✅ Complete | Client counter + server enforcement |
+| **Timestamps** | ✅ Complete | ISO format + 5-min freshness window |
+| **Verification Logic** | ✅ Complete | 4-layer checks all enforced |
+| **Attack Rejections** | ✅ Complete | HTTP 400 responses logged |
+| **Attack Demonstrations** | ✅ Complete | 4 scenarios in UI demo |
+| **Test Report** | ✅ Complete | Comprehensive test results |
+
+---
+
 ## Next Steps (Optional Enhancements)
 
 1. Add file signatures (non-repudiation)
@@ -310,9 +453,13 @@ All code clearly commented with:
 5. File versioning
 6. Time-based access expiry
 7. Download limit enforcement
+8. Rate limiting on message posting (for replay protection)
+9. Redis caching for faster nonce lookups
+10. Anomaly detection for suspicious patterns
 
 ---
 
 **Status:** ✅ COMPLETE AND TESTED
 
-All requirements implemented with comprehensive security and user-friendly interface.
+All end-to-end encryption and replay attack protection requirements implemented with comprehensive security and user-friendly interface.
+

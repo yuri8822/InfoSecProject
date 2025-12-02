@@ -23,10 +23,11 @@ import {
 // Components
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
+import ReplayAttackDemo from './components/ReplayAttackDemo';
 import ChatWindow from './components/ChatWindow';
 
 export default function App() {
-  const [view, setView] = useState('login'); // login, register, dashboard
+  const [view, setView] = useState('login'); // login, register, dashboard, replay-demo
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [user, setUser] = useState(null); // { token, username }
   const [keyStatus, setKeyStatus] = useState('checking'); // checking, present, missing
@@ -219,7 +220,22 @@ export default function App() {
           onRefreshUsers={handleFetchUsers}
           onSelectUser={setSelectedUser}
           onFetchPublicKey={handleFetchPublicKey}
+          onShowReplayDemo={() => setView('replay-demo')}
         />
+      )}
+
+      {view === 'replay-demo' && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 z-50 overflow-y-auto">
+          <div className="relative">
+            <button
+              onClick={() => setView('dashboard')}
+              className="fixed top-4 right-4 px-4 py-2 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 z-50"
+            >
+              Back to Dashboard
+            </button>
+            <ReplayAttackDemo />
+          </div>
+        </div>
       )}
 
       {/* Chat Window Modal */}
