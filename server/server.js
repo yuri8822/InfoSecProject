@@ -74,15 +74,8 @@ const createLog = async (req, type, details, username = null, severity = 'info')
 app.post('/api/register', async (req, res) => {
     const { username, password, publicKey } = req.body;
 
-    // Validate all required fields are present and not empty
-    if (!username || typeof username !== 'string' || !username.trim()) {
-        return res.status(400).json({ message: "Username is required" });
-    }
-    if (!password || typeof password !== 'string' || !password.trim()) {
-        return res.status(400).json({ message: "Password is required" });
-    }
-    if (!publicKey || typeof publicKey !== 'object' || !publicKey.kty) {
-        return res.status(400).json({ message: "Public key is required" });
+    if (!username || !password || !publicKey) {
+        return res.status(400).json({ message: "Missing fields" });
     }
 
     try {
