@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertCircle, CheckCircle, Lock, Key, Shield, Terminal, LogOut, MessageSquare } from 'lucide-react';
+import { AlertCircle, CheckCircle, Lock, Key, Shield, Terminal, LogOut, MessageSquare, ArrowLeft, Send } from 'lucide-react';
 import { KeyExchange, generateLongTermKeyPair, exportPublicKey } from './security/secureKeyExchange.js';
+import { encryptMessage, decryptMessage } from './security/endToEndMessageEncryption.js';
 
 // --- CONFIGURATION ---
 const API_URL = "http://localhost:5000/api";
@@ -161,19 +162,23 @@ const AuthForm = ({ type, formData, setFormData, error, setError, setView, handl
 );
 
 export default function App() {
-  const [view, setView] = useState('login'); // login, register, dashboard
+  const [view, setView] = useState('login'); // login, register, dashboard, chat
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [user, setUser] = useState(null); // { token, username, userId }
   const [keyStatus, setKeyStatus] = useState('checking'); // checking, generated, missing
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]); // List of all registered users
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
+  const [chatPeer, setChatPeer] = useState(null); // User we're chatting with
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [keyExchangeStatus, setKeyExchangeStatus] = useState(null); // {peerId, status, sessionKey}
   const [keyExchangeMessages, setKeyExchangeMessages] = useState([]);
   const activeKeyExchanges = useRef(new Map()); // Map<peerId, KeyExchange instance>
   const processedMessageIds = useRef(new Set()); // Track processed message IDs to avoid duplicates
+  const sessionKeys = useRef(new Map()); // Map<peerId, sessionKey ArrayBuffer> - Store established session keys
+  const [messages, setMessages] = useState([]); // Messages for current chat
+  const [messageInput, setMessageInput] = useState(''); // Current message input
 
   // NEW: Check for existing session on page load
   useEffect(() => {
@@ -316,6 +321,19 @@ export default function App() {
         const keyExchange = new KeyExchange(user.username, signingKeys);
         const response = await keyExchange.createResponseMessage(initMessage, peerKeys.signingPublicKey);
         
+        // Derive the session key as the responder (we have all the info we need).
+        const sessionKey = await keyExchange.deriveSessionKeyAsResponder();
+        
+        // Store the session key for message encryption.
+        sessionKeys.current.set(msg.from, sessionKey);
+        
+        // Update key exchange status.
+        setKeyExchangeStatus({
+          peerId: msg.from,
+          status: 'established',
+          sessionKey: sessionKey
+        });
+        
         // Send response back
         const messageId = `response-${Date.now()}-${Math.random()}`;
         await fetch(`${API_URL}/key-exchange/send`, {
@@ -337,7 +355,15 @@ export default function App() {
           headers: { Authorization: `Bearer ${user.token}` }
         });
 
-        logSecurityEvent("KEY_EXCHANGE_RESPONSE", `Responded to key exchange from ${msg.from}`, user.token);
+        logSecurityEvent("KEY_EXCHANGE_RESPONSE", `Responded to key exchange from ${msg.from} and derived session key`, user.token);
+        
+        // Auto-open chat for the receiver when key exchange completes.
+        if (view === 'dashboard') {
+          setChatPeer({ username: msg.from });
+          setView('chat');
+          // Fetch messages after a short delay to ensure state is set
+          setTimeout(() => fetchMessages(msg.from), 500);
+        }
         
         // Mark as processed
         processedMessageIds.current.add(msg.messageId);
@@ -357,8 +383,9 @@ export default function App() {
             const { type, ...responseMessage } = messageData;
             const sessionKey = await keyExchange.finalizeSession(responseMessage, peerKeys.signingPublicKey);
             
-            // Store session key (in production, you'd encrypt and store this securely)
-            // For now, we'll just mark as established
+            // Store the session key for message encryption.
+            sessionKeys.current.set(msg.from, sessionKey);
+            
             setKeyExchangeStatus({
               peerId: msg.from,
               status: 'established',
@@ -369,7 +396,12 @@ export default function App() {
             activeKeyExchanges.current.delete(msg.from);
 
             logSecurityEvent("KEY_EXCHANGE_SUCCESS", `Key exchange established with ${msg.from}`, user.token);
-            alert(`Secure session established with ${msg.from}! Session key derived.`);
+            
+            // If we're waiting to chat with this peer, open chat now
+            if (chatPeer && chatPeer.username === msg.from && view !== 'chat') {
+              setView('chat');
+              fetchMessages(msg.from);
+            }
             
             // Delete the processed message
             await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
@@ -399,6 +431,9 @@ export default function App() {
               const { type, ...responseMessage } = messageData;
               const sessionKey = await keyExchange.finalizeSession(responseMessage, peerKeys.signingPublicKey);
               
+              // Store the session key for message encryption.
+              sessionKeys.current.set(msg.from, sessionKey);
+              
               setKeyExchangeStatus({
                 peerId: msg.from,
                 status: 'established',
@@ -407,7 +442,12 @@ export default function App() {
               
               activeKeyExchanges.current.delete(msg.from);
               logSecurityEvent("KEY_EXCHANGE_SUCCESS", `Key exchange established with ${msg.from} (recovered)`, user.token);
-              alert(`Secure session established with ${msg.from}! Session key derived.`);
+              
+              // If we're waiting to chat with this peer, open chat now
+              if (chatPeer && chatPeer.username === msg.from && view !== 'chat') {
+                setView('chat');
+                fetchMessages(msg.from);
+              }
               
               // Delete the processed message
               await fetch(`${API_URL}/key-exchange/messages/${msg.messageId}`, {
@@ -438,7 +478,127 @@ export default function App() {
     }
   };
 
-  // Initiate key exchange with a peer
+  // Start chat with a peer (initiates key exchange if needed, then opens chat)
+  const startChat = async (peerUsername) => {
+    if (!user) return;
+    
+    // Prevent self-chat
+    if (peerUsername === user.username) {
+      setError("Cannot chat with yourself");
+      return;
+    }
+    
+    setLoading(true);
+    setError('');
+
+    try {
+      // Check if we already have a session key for this peer
+      const existingSessionKey = sessionKeys.current.get(peerUsername);
+      
+      if (existingSessionKey) {
+        // We already have a session, go straight to chat
+        setChatPeer({ username: peerUsername });
+        setView('chat');
+        setLoading(false);
+        return;
+      }
+
+      // Check if key exchange is in progress
+      if (keyExchangeStatus && keyExchangeStatus.peerId === peerUsername && keyExchangeStatus.status === 'init_sent') {
+        setError("Key exchange in progress. Please wait...");
+        setLoading(false);
+        return;
+      }
+
+      // Get our signing keys
+      const signingKeys = await getSigningKeys(user.username);
+      if (!signingKeys) {
+        throw new Error("Signing keys not found. Please re-register.");
+      }
+
+      // Get peer's public keys
+      const peerKeys = await fetchUserPublicKeys(peerUsername);
+      if (!peerKeys) {
+        throw new Error("Could not fetch peer's public keys. The user may not exist.");
+      }
+      if (!peerKeys.signingPublicKey) {
+        throw new Error("The selected user has not completed key setup. They need to re-register to enable messaging.");
+      }
+
+      // Create key exchange instance
+      const keyExchange = new KeyExchange(user.username, signingKeys);
+      const initMessage = await keyExchange.createInitMessage();
+      
+      // Validate init message structure
+      if (!initMessage.id || !initMessage.ephPub || !initMessage.nonce || !initMessage.signature) {
+        throw new Error("Failed to create valid key exchange message");
+      }
+
+      // Send init message
+      const messageId = `init-${Date.now()}-${Math.random()}`;
+      const res = await fetch(`${API_URL}/key-exchange/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
+        },
+        body: JSON.stringify({
+          to: peerUsername,
+          message: { type: 'init', ...initMessage },
+          messageId
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
+        throw new Error(errorData.message || `Failed to send key exchange message (${res.status})`);
+      }
+
+      // Store key exchange instance in ref BEFORE setting state
+      activeKeyExchanges.current.set(peerUsername, keyExchange);
+      
+      // Store key exchange state
+      setKeyExchangeStatus({
+        peerId: peerUsername,
+        status: 'init_sent'
+      });
+      
+      // Set chat peer and wait for key exchange
+      setChatPeer({ username: peerUsername });
+      
+      // Immediately check for any pending response messages
+      setTimeout(() => fetchKeyExchangeMessages(), 500);
+
+      logSecurityEvent("KEY_EXCHANGE_INIT", `Initiated key exchange with ${peerUsername} for chat`, user.token);
+      
+      // Poll for key exchange completion, then open chat
+      const checkInterval = setInterval(async () => {
+        const sessionKey = sessionKeys.current.get(peerUsername);
+        if (sessionKey) {
+          clearInterval(checkInterval);
+          setView('chat');
+          setLoading(false);
+          fetchMessages(peerUsername);
+        }
+      }, 500);
+      
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (!sessionKeys.current.get(peerUsername)) {
+          setError("Key exchange timed out. Please try again.");
+          setLoading(false);
+        }
+      }, 30000);
+
+    } catch (err) {
+      setError(err.message);
+      logSecurityEvent("KEY_EXCHANGE_INIT_FAIL", `Failed to initiate key exchange: ${err.message}`, user.token);
+      setLoading(false);
+    }
+  };
+
+  // Initiate key exchange with a peer (legacy function, kept for compatibility)
   const initiateKeyExchange = async (peerUsername) => {
     if (!user) return;
     
@@ -520,6 +680,113 @@ export default function App() {
     }
   };
 
+  // Fetch messages for a chat
+  const fetchMessages = async (peerUsername) => {
+    if (!user || !peerUsername) return;
+    try {
+      const res = await fetch(`${API_URL}/messages/${peerUsername}`, {
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // Decrypt messages
+        const sessionKey = sessionKeys.current.get(peerUsername);
+        if (!sessionKey) {
+          console.error("No session key for decryption");
+          return;
+        }
+
+        const decryptedMessages = await Promise.all(
+          data.messages.map(async (msg) => {
+            try {
+              const plaintext = await decryptMessage(
+                {
+                  ciphertext: msg.ciphertext,
+                  iv: msg.iv,
+                  tag: msg.tag
+                },
+                sessionKey
+              );
+              return {
+                ...msg,
+                plaintext: plaintext,
+                isDecrypted: true
+              };
+            } catch (err) {
+              console.error("Failed to decrypt message:", err);
+              return {
+                ...msg,
+                plaintext: "[Decryption failed]",
+                isDecrypted: false
+              };
+            }
+          })
+        );
+        setMessages(decryptedMessages);
+      }
+    } catch (err) {
+      console.error("Fetch messages failed", err);
+    }
+  };
+
+  // Send an encrypted message
+  const sendMessage = async (plaintext) => {
+    if (!user || !chatPeer || !plaintext.trim()) {
+      console.error("Cannot send message:", { user: !!user, chatPeer: !!chatPeer, plaintext: plaintext.trim() });
+      return;
+    }
+
+    const sessionKey = sessionKeys.current.get(chatPeer.username);
+    if (!sessionKey) {
+      const errorMsg = "No session key established. Please wait for key exchange to complete.";
+      setError(errorMsg);
+      console.error(errorMsg, "Available session keys:", Array.from(sessionKeys.current.keys()));
+      return;
+    }
+
+    try {
+      console.log("Encrypting message for:", chatPeer.username);
+      // Encrypt the message
+      const encrypted = await encryptMessage(plaintext, sessionKey);
+      console.log("Message encrypted successfully");
+
+      // Send to server
+      const res = await fetch(`${API_URL}/messages/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
+        },
+        body: JSON.stringify({
+          to: chatPeer.username,
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          tag: encrypted.tag
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
+        console.error("Failed to send message:", res.status, errorData);
+        throw new Error(errorData.message || "Failed to send message");
+      }
+
+      console.log("Message sent successfully");
+      
+      // Clear input and refresh messages
+      setMessageInput('');
+      
+      // Refresh messages immediately
+      await fetchMessages(chatPeer.username);
+      
+      logSecurityEvent("MESSAGE_SENT", `Sent encrypted message to ${chatPeer.username}`, user.token);
+    } catch (err) {
+      console.error("Error sending message:", err);
+      setError(err.message);
+      logSecurityEvent("MESSAGE_SEND_FAIL", `Failed to send message: ${err.message}`, user.token);
+    }
+  };
+
   useEffect(() => {
     if (view === 'dashboard') {
       checkKeyStatus();
@@ -532,8 +799,13 @@ export default function App() {
         clearInterval(logInterval);
         clearInterval(keyExchangeInterval);
       };
+    } else if (view === 'chat' && chatPeer) {
+      // Poll for new messages when in chat view
+      fetchMessages(chatPeer.username);
+      const messageInterval = setInterval(() => fetchMessages(chatPeer.username), 2000);
+      return () => clearInterval(messageInterval);
     }
-  }, [view, user]);
+  }, [view, user, chatPeer]);
 
   // --- CRYPTO FUNCTIONS ---
 
@@ -747,22 +1019,13 @@ export default function App() {
               <div className="font-medium text-gray-800">{selectedUser.username}</div>
               <div className="mt-2 space-y-2">
                 <button 
-                  onClick={() => initiateKeyExchange(selectedUser.username)}
-                  disabled={loading || (keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username)}
+                  onClick={() => startChat(selectedUser.username)}
+                  disabled={loading}
                   className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-xs font-medium rounded transition-colors flex items-center justify-center gap-2"
                 >
                   <MessageSquare size={14} />
-                  {keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username 
-                    ? 'Key Exchange In Progress...' 
-                    : 'Initiate Key Exchange'}
+                  {loading ? 'Connecting...' : 'Chat'}
                 </button>
-                {keyExchangeStatus && keyExchangeStatus.peerId === selectedUser.username && (
-                  <div className="text-xs text-gray-600 mt-1">
-                    Status: {keyExchangeStatus.status === 'init_sent' ? 'Waiting for response...' : 
-                            keyExchangeStatus.status === 'established' ? 'Session established!' : 
-                            keyExchangeStatus.status}
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -871,6 +1134,101 @@ export default function App() {
         />
       )}
       {view === 'dashboard' && <Dashboard />}
+      {view === 'chat' && chatPeer && (
+        <div className="w-full max-w-4xl h-[90vh] flex flex-col bg-white rounded-xl shadow-lg border border-gray-100">
+          {/* Chat Header */}
+          <div className="flex items-center justify-between p-4 border-b border-gray-200">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setView('dashboard');
+                  setChatPeer(null);
+                  setMessages([]);
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <ArrowLeft size={20} />
+              </button>
+              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold">
+                {chatPeer.username[0].toUpperCase()}
+              </div>
+              <div>
+                <h2 className="font-semibold text-gray-900">{chatPeer.username}</h2>
+                <div className="text-xs text-gray-500 flex items-center gap-1">
+                  <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                  End-to-end encrypted
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Messages Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+            {messages.length === 0 ? (
+              <div className="text-center text-gray-400 mt-10">
+                <MessageSquare size={48} className="mx-auto mb-2 opacity-50" />
+                <p>No messages yet. Start the conversation!</p>
+              </div>
+            ) : (
+              messages.map((msg, idx) => {
+                const isFromMe = msg.from === user.username;
+                return (
+                  <div
+                    key={idx}
+                    className={`flex ${isFromMe ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                        isFromMe
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white text-gray-900 border border-gray-200'
+                      }`}
+                    >
+                      <div className="text-sm">{msg.plaintext}</div>
+                      <div className={`text-xs mt-1 ${
+                        isFromMe ? 'text-blue-100' : 'text-gray-400'
+                      }`}>
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Message Input */}
+          <div className="p-4 border-t border-gray-200">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendMessage(messageInput);
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={messageInput}
+                onChange={(e) => setMessageInput(e.target.value)}
+                placeholder="Type a message..."
+                className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                disabled={!sessionKeys.current.get(chatPeer.username)}
+              />
+              <button
+                type="submit"
+                disabled={!messageInput.trim() || !sessionKeys.current.get(chatPeer.username)}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors flex items-center gap-2"
+              >
+                <Send size={18} />
+                Send
+              </button>
+            </form>
+            {!sessionKeys.current.get(chatPeer.username) && (
+              <p className="text-xs text-gray-500 mt-2">Establishing secure connection...</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

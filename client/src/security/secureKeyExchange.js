@@ -331,6 +331,45 @@ class KeyExchange {
     };
   }
 
+  // Derive the session key as the responder (after creating response message).
+  // The responder can derive the session key independently since they have all the needed info.
+  async deriveSessionKeyAsResponder() {
+    if (!this.ephemeral || !this.nonce || !this.peerEphemeral || !this.peerNonce) {
+      throw new Error("Missing required data for session key derivation");
+    }
+
+    // Import the peer's ephemeral public key for ECDH.
+    const peerEphPubKey = await importX25519PublicKey(this.peerEphemeral);
+
+    // Compute the shared secret using ECDH.
+    const sharedSecret = await computeSharedSecret(this.ephemeral, peerEphPubKey);
+
+    // Derive the session key using HKDF (same process as finalizeSession).
+    const salt = await hashData(
+      new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
+    );
+    
+    const ourEphPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
+    const ourEphPubArray = new Uint8Array(ourEphPubKey);
+    const transcript = new Uint8Array([
+      ...ourEphPubArray,
+      ...this.nonce,
+      ...new Uint8Array(this.peerEphemeral),
+      ...this.peerNonce
+    ]);
+    // Use canonical ordering for info string (alphabetical) so both parties derive the same key.
+    // For responder: peerId is the initiator, clientId is the responder
+    // We need the same order as initiator uses: "E2EE-Prot v1" + initiatorId + responderId
+    // Since peerId is the initiator and clientId is the responder, we use peerId + clientId
+    // But initiator uses clientId (initiator) + peerId (responder), so we need to match that
+    // Actually, let's use alphabetical order to ensure consistency
+    const ids = [this.peerId, this.clientId].sort();
+    const info = "E2EE-Prot v1" + ids[0] + ids[1];
+    this.sessionKey = await deriveSessionKey(sharedSecret, salt, info);
+
+    return this.sessionKey;
+  }
+
   // Finalize the session after receiving the peer's response message.
   async finalizeSession(peerResponseMessage, peerPublicKeyJwk) {
     // Import the peer's public key.
@@ -380,8 +419,12 @@ class KeyExchange {
     const sharedSecret = await computeSharedSecret(this.ephemeral, peerEphPubKey);
 
     // Derive the session key using HKDF.
+    // Use canonical ordering for salt (alphabetical by clientId) to ensure both parties use same salt.
+    const saltOrder = this.clientId < this.peerId;
     const salt = await hashData(
-      new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
+      saltOrder
+        ? new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
+        : new Uint8Array([...this.peerNonce, ...this.nonce]).buffer
     );
     const transcript = new Uint8Array([
       ...ourEphPubArray,
@@ -389,7 +432,9 @@ class KeyExchange {
       ...new Uint8Array(peerEphPubBuffer),
       ...this.peerNonce
     ]);
-    const info = "E2EE-Prot v1" + this.clientId + this.peerId;
+    // Use canonical ordering (alphabetical) so both parties derive the same key.
+    const ids = [this.clientId, this.peerId].sort();
+    const info = "E2EE-Prot v1" + ids[0] + ids[1];
     this.sessionKey = await deriveSessionKey(sharedSecret, salt, info);
 
     return this.sessionKey;

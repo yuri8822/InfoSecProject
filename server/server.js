@@ -49,8 +49,19 @@ const logSchema = new mongoose.Schema({
     severity: { type: String, enum: ['info', 'warning', 'critical'], default: 'info' }
 });
 
+// Message Schema - Only stores ciphertext, IV, tag, and metadata (NO PLAINTEXT)
+const messageSchema = new mongoose.Schema({
+    from: { type: String, required: true },
+    to: { type: String, required: true },
+    ciphertext: { type: String, required: true }, // Base64 encoded ciphertext
+    iv: { type: String, required: true }, // Base64 encoded IV
+    tag: { type: String, required: true }, // Base64 encoded authentication tag
+    timestamp: { type: Date, default: Date.now }
+});
+
 const User = mongoose.model('User', userSchema);
 const AuditLog = mongoose.model('AuditLog', logSchema);
+const Message = mongoose.model('Message', messageSchema);
 
 // --- HELPER: LOGGING ---
 const createLog = async (req, type, details, username = null, severity = 'info') => {
@@ -342,6 +353,84 @@ app.delete('/api/key-exchange/messages/:messageId', async (req, res) => {
             res.status(404).json({ message: "Message not found" });
         }
     } catch (e) {
+        res.sendStatus(403);
+    }
+});
+
+// 8. SEND ENCRYPTED MESSAGE
+app.post('/api/messages/send', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const { to, ciphertext, iv, tag } = req.body;
+
+        if (!to || !ciphertext || !iv || !tag) {
+            return res.status(400).json({ message: "Missing required fields: to, ciphertext, iv, tag" });
+        }
+
+        // Verify target user exists
+        const targetUser = await User.findOne({ username: to });
+        if (!targetUser) {
+            return res.status(404).json({ message: "Target user not found" });
+        }
+
+        // Store message (ONLY ciphertext, IV, tag, and metadata - NO PLAINTEXT)
+        const newMessage = new Message({
+            from: decoded.username,
+            to: to,
+            ciphertext: ciphertext,
+            iv: iv,
+            tag: tag
+        });
+        await newMessage.save();
+
+        await createLog(req, 'MESSAGE_SENT', `User ${decoded.username} sent encrypted message to ${to}`, decoded.username, 'info');
+
+        res.json({ message: "Message sent successfully", messageId: newMessage._id });
+    } catch (e) {
+        console.error("Send message error:", e);
+        await createLog(req, 'MESSAGE_SEND_ERROR', `Error sending message: ${e.message}`, null, 'warning');
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// 9. GET MESSAGES (between two users)
+app.get('/api/messages/:peerUsername', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const peerUsername = req.params.peerUsername;
+
+        // Get all messages between the two users (bidirectional)
+        const messages = await Message.find({
+            $or: [
+                { from: decoded.username, to: peerUsername },
+                { from: peerUsername, to: decoded.username }
+            ]
+        }).sort({ timestamp: 1 }); // Oldest first
+
+        await createLog(req, 'MESSAGE_FETCH', `User ${decoded.username} fetched messages with ${peerUsername}`, decoded.username, 'info');
+
+        // Return messages with ciphertext, IV, tag, and metadata (NO PLAINTEXT)
+        res.json({
+            messages: messages.map(msg => ({
+                _id: msg._id,
+                from: msg.from,
+                to: msg.to,
+                ciphertext: msg.ciphertext,
+                iv: msg.iv,
+                tag: msg.tag,
+                timestamp: msg.timestamp
+            }))
+        });
+    } catch (e) {
+        console.error("Get messages error:", e);
         res.sendStatus(403);
     }
 });
