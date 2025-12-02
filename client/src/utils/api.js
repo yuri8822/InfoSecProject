@@ -112,3 +112,40 @@ export const fetchUserPublicKey = async (username, token) => {
     return null;
   }
 };
+
+/**
+ * Part 4: Send encrypted message
+ * @param {Object} messageData - Message data with encryption fields
+ * @param {string} token - JWT token
+ * @returns {Object} Response data
+ */
+export const sendMessage = async (messageData, token) => {
+  const res = await fetch(`${API_URL}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(messageData)
+  });
+  
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || 'Failed to send message');
+  
+  return data;
+};
+
+/**
+ * Fetch messages with another user
+ * @param {string} otherUsername - Other user's username
+ * @param {string} token - JWT token
+ * @returns {Array} List of messages
+ */
+export const fetchMessages = async (otherUsername, token) => {
+  const res = await fetch(`${API_URL}/messages/${otherUsername}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to fetch messages');
+  return data;
+};

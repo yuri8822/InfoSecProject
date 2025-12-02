@@ -23,6 +23,7 @@ import {
 // Components
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
+import ChatWindow from './components/ChatWindow';
 
 export default function App() {
   const [view, setView] = useState('login'); // login, register, dashboard
@@ -32,6 +33,7 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]); // List of all registered users
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
+  const [showChat, setShowChat] = useState(false); // Show chat window
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -85,11 +87,8 @@ export default function App() {
 
   // Handle user public key fetch
   const handleFetchPublicKey = async (username) => {
-    const pubKey = await fetchUserPublicKey(username, user.token);
-    if (pubKey) {
-      console.log('Public Key for', username, ':', pubKey);
-      alert(`Public key fetched for ${username}. Check console for details.`);
-    }
+    // Open chat window with selected user
+    setShowChat(true);
   };
 
   // Dashboard data polling
@@ -220,6 +219,15 @@ export default function App() {
           onRefreshUsers={handleFetchUsers}
           onSelectUser={setSelectedUser}
           onFetchPublicKey={handleFetchPublicKey}
+        />
+      )}
+
+      {/* Chat Window Modal */}
+      {showChat && selectedUser && (
+        <ChatWindow 
+          user={user}
+          recipient={selectedUser}
+          onClose={() => setShowChat(false)}
         />
       )}
     </div>

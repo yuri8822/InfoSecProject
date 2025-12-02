@@ -48,8 +48,22 @@ const logSchema = new mongoose.Schema({
     severity: { type: String, enum: ['info', 'warning', 'critical'], default: 'info' }
 });
 
+// Message Schema (Part 4: End-to-End Encrypted Messages)
+const messageSchema = new mongoose.Schema({
+    from: { type: String, required: true },
+    to: { type: String, required: true },
+    encryptedSessionKey: { type: String, required: true }, // AES key encrypted with recipient's RSA public key
+    ciphertext: { type: String, required: true }, // Message encrypted with AES-GCM
+    iv: { type: String, required: true }, // Initialization Vector for AES-GCM
+    authTag: { type: String, required: true }, // Authentication tag from AES-GCM
+    nonce: { type: String, required: true }, // For replay attack protection
+    timestamp: { type: Date, default: Date.now },
+    sequenceNumber: { type: Number, required: true }, // For replay attack protection
+});
+
 const User = mongoose.model('User', userSchema);
 const AuditLog = mongoose.model('AuditLog', logSchema);
+const Message = mongoose.model('Message', messageSchema);
 
 // --- HELPER: LOGGING ---
 const createLog = async (req, type, details, username = null, severity = 'info') => {
@@ -69,7 +83,7 @@ const createLog = async (req, type, details, username = null, severity = 'info')
 };
 
 // Initialize routes with models and logging function
-initializeRoutes(User, AuditLog, createLog);
+initializeRoutes(User, AuditLog, Message, createLog);
 
 // Mount API routes
 app.use('/api', apiRouter);

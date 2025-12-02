@@ -13,12 +13,13 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_project_key_change_this_in_prod";
 
 // Models will be injected via initialization function
-let User, AuditLog, createLog;
+let User, AuditLog, Message, createLog;
 
 // Initialize function to set dependencies
-const initialize = (userModel, auditLogModel, createLogFn) => {
+const initialize = (userModel, auditLogModel, messageModel, createLogFn) => {
     User = userModel;
     AuditLog = auditLogModel;
+    Message = messageModel;
     createLog = createLogFn;
 };
 
@@ -175,6 +176,95 @@ router.get('/users/:username/public-key', async (req, res) => {
         res.json({ username: targetUser.username, publicKey: targetUser.publicKey });
     } catch (e) {
         res.sendStatus(403);
+    }
+});
+
+// 7. SEND ENCRYPTED MESSAGE (Part 4)
+router.post('/messages', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        
+        const { to, encryptedSessionKey, ciphertext, iv, authTag, nonce, sequenceNumber } = req.body;
+
+        if (!to || !encryptedSessionKey || !ciphertext || !iv || !authTag || !nonce || sequenceNumber === undefined) {
+            return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        // Check for replay attack: duplicate nonce
+        const existingMessage = await Message.findOne({ from: decoded.username, to, nonce });
+        if (existingMessage) {
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Duplicate nonce detected from ${decoded.username} to ${to}`, decoded.username, 'critical');
+            return res.status(400).json({ message: "Replay attack detected: duplicate nonce" });
+        }
+
+        // Check sequence number (should be incrementing)
+        const lastMessage = await Message.findOne({ from: decoded.username, to }).sort({ sequenceNumber: -1 });
+        if (lastMessage && sequenceNumber <= lastMessage.sequenceNumber) {
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Invalid sequence number from ${decoded.username} to ${to}`, decoded.username, 'critical');
+            return res.status(400).json({ message: "Replay attack detected: invalid sequence" });
+        }
+
+        // Check timestamp (message shouldn't be older than 5 minutes)
+        const messageAge = Date.now() - new Date(req.body.timestamp || Date.now()).getTime();
+        if (messageAge > 5 * 60 * 1000) {
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Old timestamp from ${decoded.username} to ${to}`, decoded.username, 'warning');
+            return res.status(400).json({ message: "Message timestamp too old" });
+        }
+
+        // Store encrypted message (server cannot decrypt it!)
+        const message = new Message({
+            from: decoded.username,
+            to,
+            encryptedSessionKey,
+            ciphertext,
+            iv,
+            authTag,
+            nonce,
+            sequenceNumber,
+            timestamp: new Date()
+        });
+
+        await message.save();
+
+        await createLog(req, 'MESSAGE_SENT', `Encrypted message sent from ${decoded.username} to ${to}`, decoded.username, 'info');
+        
+        res.status(201).json({ message: "Message sent successfully", messageId: message._id });
+
+    } catch (err) {
+        console.error("Send message error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+// 8. GET MESSAGES (Part 4)
+router.get('/messages/:otherUsername', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const otherUsername = req.params.otherUsername;
+
+        // Fetch messages between current user and other user (both directions)
+        const messages = await Message.find({
+            $or: [
+                { from: decoded.username, to: otherUsername },
+                { from: otherUsername, to: decoded.username }
+            ]
+        }).sort({ timestamp: 1 });
+
+        await createLog(req, 'MESSAGES_RETRIEVED', `User ${decoded.username} retrieved messages with ${otherUsername}`, decoded.username, 'info');
+        
+        res.json(messages);
+
+    } catch (err) {
+        console.error("Get messages error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
 
