@@ -15,8 +15,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, Copy, Play, Trash2, RefreshCw, Eye, EyeOff } from 'lucide-react';
+import { generateAESKey, encryptAES, generateNonce, generateKeyPair, exportKey } from '../utils/crypto';
 
-export default function ReplayAttackDemo() {
+export default function ReplayAttackDemo({ currentUser }) {
   const [attacks, setAttacks] = useState([]);
   const [selectedAttack, setSelectedAttack] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -25,9 +26,10 @@ export default function ReplayAttackDemo() {
   const [showLogs, setShowLogs] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [victim, setVictim] = useState(currentUser); // VICTIM IS THE PASSED USER
 
-  // Mock user for testing
-  const mockUser = {
+  // Attacker account used to send replay attacks
+  const attackerAccount = {
     username: 'alice',
     password: 'password123'
   };
@@ -35,27 +37,27 @@ export default function ReplayAttackDemo() {
   // Authenticate and get token
   const authenticate = async () => {
     try {
-      console.log('🔐 Authenticating user...');
+      console.log('🔐 Authenticating attacker account...');
       const response = await fetch('http://localhost:5000/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: mockUser.username,
-          password: mockUser.password
+          username: attackerAccount.username,
+          password: attackerAccount.password
         })
       });
 
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Authentication successful, token:', data.token.substring(0, 20) + '...');
+        console.log('✅ Attacker authentication successful, token:', data.token.substring(0, 20) + '...');
         setToken(data.token);
-        localStorage.setItem('token', data.token);
+        localStorage.setItem('attackToken', data.token);
         setAuthError('');
         return data.token;
       } else {
         const error = await response.text();
         console.error('❌ Authentication failed:', error);
-        setAuthError('Authentication failed - user does not exist');
+        setAuthError('Authentication failed - attacker account does not exist');
         // Try to register
         return await registerAndAuth();
       }
@@ -66,10 +68,10 @@ export default function ReplayAttackDemo() {
     }
   };
 
-  // Register user if doesn't exist
+  // Register attacker account if doesn't exist
   const registerAndAuth = async () => {
     try {
-      console.log('📝 Registering new user...');
+      console.log('📝 Registering attacker account...');
       // Generate a dummy public key for registration
       const dummyPublicKey = {
         kty: 'RSA',
@@ -82,14 +84,14 @@ export default function ReplayAttackDemo() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: mockUser.username,
-          password: mockUser.password,
+          username: attackerAccount.username,
+          password: attackerAccount.password,
           publicKey: dummyPublicKey
         })
       });
 
       if (registerResponse.ok) {
-        console.log('✅ User registered successfully');
+        console.log('✅ Attacker account registered successfully');
         // Now try to login
         return await authenticate();
       } else {
@@ -152,22 +154,29 @@ export default function ReplayAttackDemo() {
     
     const initAuth = async () => {
       try {
-        // Check if token already exists
-        const existingToken = localStorage.getItem('token');
-        if (existingToken) {
-          console.log('📌 Using existing token from localStorage');
-          setToken(existingToken);
-          fetchServerLogs(existingToken);
+        // Use the victim passed from parent component
+        if (currentUser) {
+          setVictim(currentUser);
+          console.log(`👤 Current user (VICTIM): ${currentUser}`);
+          console.log(`🔓 Will demonstrate replay attacks targeting: ${currentUser}`);
+        }
+
+        // Get or create attacker token
+        const existingAttackToken = localStorage.getItem('attackToken');
+        if (existingAttackToken) {
+          console.log('📌 Using existing attacker token from localStorage');
+          setToken(existingAttackToken);
+          fetchServerLogs(existingAttackToken);
           
           // Start refresh interval
           interval = setInterval(() => {
-            fetchServerLogs(existingToken);
+            fetchServerLogs(existingAttackToken);
           }, 2000);
         } else {
-          console.log('🔑 No token found, authenticating...');
+          console.log('🔑 No attacker token found, authenticating attacker account...');
           const newToken = await authenticate();
           if (newToken) {
-            console.log('✅ Authentication successful, starting log fetch...');
+            console.log('✅ Attacker authentication successful, starting log fetch...');
             fetchServerLogs(newToken);
             
             // Start refresh interval
@@ -175,7 +184,7 @@ export default function ReplayAttackDemo() {
               fetchServerLogs(newToken);
             }, 2000);
           } else {
-            console.error('❌ Failed to authenticate');
+            console.error('❌ Failed to authenticate attacker account');
           }
         }
       } catch (err) {
@@ -188,33 +197,46 @@ export default function ReplayAttackDemo() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, []);
+  }, [currentUser]);
 
   /**
    * ATTACK 1: DUPLICATE NONCE REPLAY
-   * Attacker intercepts a message and replays it with the same nonce
+   * Attacker (alice) intercepts a message and replays it to VICTIM (logged-in user)
    */
   const demonstrateDuplicateNonceAttack = async () => {
+    if (!victim) {
+      alert('No victim user detected. Please ensure you are logged in.');
+      return;
+    }
+    
     setLoading(true);
     try {
-      // Step 1: Send a legitimate message
-      const legitNonce = generateRandomNonce();
+      // Step 1: Generate real encrypted message FROM attacker TO victim
+      const legitNonce = generateNonce();
       const legitSeqNum = Math.floor(Math.random() * 1000);
       
+      // Create real AES key and encrypt a message
+      const aesKey = await generateAESKey();
+      const messageContent = `Hello ${victim}! This is a legitimate message from alice.`;
+      const encrypted = await encryptAES(messageContent, aesKey);
+      
       const legitMessage = {
-        to: 'bob',
+        to: victim, // VICTIM IS THE RECIPIENT
         encryptedSessionKey: 'mock_key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'mock_ciphertext_' + Math.random().toString(36).substring(7),
-        iv: 'mock_iv_' + Math.random().toString(36).substring(7),
-        authTag: 'mock_tag_' + Math.random().toString(36).substring(7),
+        ciphertext: encrypted.ciphertext,
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
         nonce: legitNonce,
         sequenceNumber: legitSeqNum,
         timestamp: new Date().toISOString()
       };
 
-      console.log('📤 Sending legitimate message:', {
+      console.log('📤 Attacker sending legitimate message to VICTIM:', {
+        victim: victim,
+        content: messageContent,
         nonce: legitNonce.substring(0, 16) + '...',
-        sequenceNumber: legitSeqNum
+        sequenceNumber: legitSeqNum,
+        ciphertext: encrypted.ciphertext.substring(0, 30) + '...'
       });
 
       const response1 = await fetch('http://localhost:5000/api/messages', {
@@ -227,19 +249,19 @@ export default function ReplayAttackDemo() {
       });
 
       const result1 = await response1.json();
-      console.log('✅ Legitimate message sent:', result1);
+      console.log('✅ Legitimate message sent to victim:', result1);
 
       // Step 2: Attacker captures and replays the SAME message
-      console.log('\n🚨 ATTACK: Replaying intercepted message with SAME nonce...');
+      console.log('\n🚨 ATTACK: Replaying intercepted message with SAME nonce to VICTIM...');
       
       const replayMessage = {
-        to: 'bob',
+        to: victim, // SAME VICTIM
         encryptedSessionKey: 'mock_key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'mock_ciphertext_' + Math.random().toString(36).substring(7),
-        iv: 'mock_iv_' + Math.random().toString(36).substring(7),
-        authTag: 'mock_tag_' + Math.random().toString(36).substring(7),
+        ciphertext: encrypted.ciphertext, // Same ciphertext
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
         nonce: legitNonce, // SAME NONCE - THIS IS THE ATTACK
-        sequenceNumber: legitSeqNum + 1, // Increment sequence to bypass sequence check
+        sequenceNumber: legitSeqNum + 1, // Increment sequence to try to bypass sequence check
         timestamp: new Date().toISOString()
       };
       
@@ -257,12 +279,24 @@ export default function ReplayAttackDemo() {
 
       const attack = {
         id: Date.now(),
-        type: 'Duplicate Nonce',
-        description: 'Attacker captures and replays message with identical nonce',
+        type: 'Duplicate Nonce Replay',
+        description: `Attacker (alice) replays message to VICTIM (${victim}) with identical nonce`,
+        details: {
+          attacker: 'alice',
+          victim: victim,
+          messageContent,
+          nonce: legitNonce.substring(0, 20) + '...',
+          encryptionDetails: {
+            algorithm: 'AES-256-GCM',
+            ciphertext: encrypted.ciphertext.substring(0, 50) + '...',
+            iv: encrypted.iv.substring(0, 20) + '...',
+            authTag: encrypted.authTag.substring(0, 20) + '...'
+          }
+        },
         legitimate: { status: response1.status, message: result1 },
         attack: { status: replayResponse.status, message: replayResult },
-        protection: 'Nonce Uniqueness Check',
-        result: replayResponse.status === 400 ? '✅ BLOCKED' : '❌ FAILED'
+        protection: 'Nonce Uniqueness Check - Server detects duplicate nonce and blocks replay to victim',
+        result: replayResponse.status === 400 ? '✅ VICTIM PROTECTED' : '❌ ATTACK SUCCEEDED'
       };
 
       setAttacks(prev => [attack, ...prev]);
@@ -275,21 +309,31 @@ export default function ReplayAttackDemo() {
 
   /**
    * ATTACK 2: SEQUENCE NUMBER MANIPULATION
-   * Attacker tries to send a message with a decremented sequence number
+   * Attacker (alice) tries to send to VICTIM with decremented sequence number
    */
   const demonstrateSequenceNumberAttack = async () => {
+    if (!currentUser) {
+      alert('No victim user detected. Please ensure you are logged in.');
+      return;
+    }
+
     setLoading(true);
     try {
       const targetSeq = 100;
+      
+      // Create real encrypted message
+      const aesKey = await generateAESKey();
+      const messageContent = `Message to ${currentUser} with high sequence number`;
+      const encrypted = await encryptAES(messageContent, aesKey);
 
-      // First send a message with high sequence number to CHARLIE (different recipient)
+      // First send a message with high sequence number to VICTIM
       const message1 = {
-        to: 'charlie',
+        to: currentUser, // VICTIM
         encryptedSessionKey: 'key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'ct_' + Math.random().toString(36).substring(7),
-        iv: 'iv_' + Math.random().toString(36).substring(7),
-        authTag: 'tag_' + Math.random().toString(36).substring(7),
-        nonce: generateRandomNonce(),
+        ciphertext: encrypted.ciphertext,
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
+        nonce: generateNonce(),
         sequenceNumber: targetSeq + 10, // Higher sequence
         timestamp: new Date().toISOString()
       };
@@ -303,18 +347,22 @@ export default function ReplayAttackDemo() {
         body: JSON.stringify(message1)
       });
 
-      console.log('✅ Legitimate message with seq', targetSeq + 10, ':', resp1.status);
+      console.log('✅ Legitimate message with seq', targetSeq + 10, 'to victim:', resp1.status);
 
       // Now try to replay with LOWER sequence number
-      console.log('🚨 ATTACK: Sending message with LOWER sequence number:', targetSeq);
+      console.log('🚨 ATTACK: Sending message with LOWER sequence number to VICTIM');
+      
+      const aesKey2 = await generateAESKey();
+      const maliciousContent = 'Malicious message with lower sequence';
+      const encrypted2 = await encryptAES(maliciousContent, aesKey2);
       
       const message2 = {
-        to: 'charlie',
+        to: currentUser, // SAME VICTIM
         encryptedSessionKey: 'key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'ct_' + Math.random().toString(36).substring(7),
-        iv: 'iv_' + Math.random().toString(36).substring(7),
-        authTag: 'tag_' + Math.random().toString(36).substring(7),
-        nonce: generateRandomNonce(),
+        ciphertext: encrypted2.ciphertext,
+        iv: encrypted2.iv,
+        authTag: encrypted2.authTag,
+        nonce: generateNonce(),
         sequenceNumber: targetSeq, // LOWER sequence
         timestamp: new Date().toISOString()
       };
@@ -333,11 +381,22 @@ export default function ReplayAttackDemo() {
       const attack = {
         id: Date.now() + 1,
         type: 'Sequence Number Regression',
-        description: 'Attacker sends message with sequence number lower than previous',
+        description: `Attacker (alice) sends message to VICTIM (${currentUser}) with decremented sequence number`,
+        details: {
+          attacker: 'alice',
+          victim: currentUser,
+          legitimate: { content: messageContent, sequence: targetSeq + 10 },
+          attack: { content: maliciousContent, sequence: targetSeq },
+          encryptionDetails: {
+            algorithm: 'AES-256-GCM',
+            legitimateCiphertext: encrypted.ciphertext.substring(0, 50) + '...',
+            maliciousCiphertext: encrypted2.ciphertext.substring(0, 50) + '...'
+          }
+        },
         legitimate: { seqNum: targetSeq + 10, status: resp1.status },
         attack: { seqNum: targetSeq, status: resp2.status, message: result2 },
-        protection: 'Sequence Number Validation',
-        result: resp2.status === 400 ? '✅ BLOCKED' : '❌ FAILED'
+        protection: 'Sequence Number Validation - Server enforces monotonically increasing sequences per recipient',
+        result: resp2.status === 400 ? '✅ VICTIM PROTECTED' : '❌ ATTACK SUCCEEDED'
       };
 
       setAttacks(prev => [attack, ...prev]);
@@ -350,23 +409,33 @@ export default function ReplayAttackDemo() {
 
   /**
    * ATTACK 3: TIMESTAMP MANIPULATION
-   * Attacker modifies message timestamp to be very old
+   * Attacker (alice) sends to VICTIM with an old timestamp
    */
   const demonstrateTimestampAttack = async () => {
+    if (!currentUser) {
+      alert('No victim user detected. Please ensure you are logged in.');
+      return;
+    }
+
     setLoading(true);
     try {
+      // Create real encrypted message
+      const aesKey = await generateAESKey();
+      const messageContent = `Old message from alice to ${currentUser} from 10 minutes ago`;
+      const encrypted = await encryptAES(messageContent, aesKey);
+      
       // Create message with timestamp 10 minutes old (exceeds 5-minute window)
       const oldTimestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
-      console.log('🚨 ATTACK: Sending message with timestamp 10 minutes old');
+      console.log(`🚨 ATTACK: Sending OLD message (10 min old) to VICTIM (${currentUser})`);
 
       const message = {
-        to: 'diana',
+        to: currentUser, // VICTIM
         encryptedSessionKey: 'key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'ct_' + Math.random().toString(36).substring(7),
-        iv: 'iv_' + Math.random().toString(36).substring(7),
-        authTag: 'tag_' + Math.random().toString(36).substring(7),
-        nonce: generateRandomNonce(),
+        ciphertext: encrypted.ciphertext,
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
+        nonce: generateNonce(),
         sequenceNumber: Math.floor(Math.random() * 10000),
         timestamp: oldTimestamp
       };
@@ -385,14 +454,24 @@ export default function ReplayAttackDemo() {
       const attack = {
         id: Date.now() + 2,
         type: 'Timestamp Manipulation',
-        description: 'Attacker sends message with timestamp older than 5 minutes',
+        description: `Attacker (alice) sends STALE message to VICTIM (${currentUser}) with timestamp older than 5 minutes`,
         details: {
+          attacker: 'alice',
+          victim: currentUser,
+          messageContent,
           messageTimestamp: oldTimestamp,
+          currentServerTime: new Date().toISOString(),
           ageMinutes: 10,
-          maxAllowedMinutes: 5
+          maxAllowedMinutes: 5,
+          encryptionDetails: {
+            algorithm: 'AES-256-GCM',
+            ciphertext: encrypted.ciphertext.substring(0, 50) + '...',
+            iv: encrypted.iv.substring(0, 20) + '...',
+            authTag: encrypted.authTag.substring(0, 20) + '...'
+          }
         },
-        result: response.status === 400 ? '✅ BLOCKED' : '❌ FAILED',
-        protection: 'Timestamp Freshness Check',
+        result: response.status === 400 ? '✅ VICTIM PROTECTED' : '❌ ATTACK SUCCEEDED',
+        protection: 'Timestamp Freshness Check - Server rejects messages older than 5 minutes',
         message: result
       };
 
@@ -406,21 +485,31 @@ export default function ReplayAttackDemo() {
 
   /**
    * ATTACK 4: SAME SEQUENCE WITH DIFFERENT NONCE
-   * Attacker tries to send different payload with same sequence but different nonce
+   * Attacker (alice) tries to send different payload with same sequence to VICTIM
    */
   const demonstrateSameSequenceDifferentNonce = async () => {
+    if (!currentUser) {
+      alert('No victim user detected. Please ensure you are logged in.');
+      return;
+    }
+
     setLoading(true);
     try {
       const sharedSeq = Math.floor(Math.random() * 5000) + 100;
 
-      // Send first message to EVE
+      // Create first real encrypted message
+      const aesKey1 = await generateAESKey();
+      const originalContent = 'Original legitimate message to victim';
+      const encrypted1 = await encryptAES(originalContent, aesKey1);
+      
+      // Send first message to VICTIM
       const msg1 = {
-        to: 'eve',
+        to: currentUser, // VICTIM
         encryptedSessionKey: 'key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'ORIGINAL_MESSAGE',
-        iv: 'iv_' + Math.random().toString(36).substring(7),
-        authTag: 'tag_' + Math.random().toString(36).substring(7),
-        nonce: generateRandomNonce(),
+        ciphertext: encrypted1.ciphertext,
+        iv: encrypted1.iv,
+        authTag: encrypted1.authTag,
+        nonce: generateNonce(),
         sequenceNumber: sharedSeq,
         timestamp: new Date().toISOString()
       };
@@ -434,18 +523,23 @@ export default function ReplayAttackDemo() {
         body: JSON.stringify(msg1)
       });
 
-      console.log('✅ Message accepted with seq', sharedSeq);
+      console.log(`✅ Message accepted with seq ${sharedSeq} to victim`);
 
-      // Try to send different message with same sequence (but different nonce)
-      console.log('🚨 ATTACK: Sending DIFFERENT message with SAME sequence number');
+      // Create second malicious encrypted message
+      const aesKey2 = await generateAESKey();
+      const maliciousContent = 'Malicious message trying to impersonate original';
+      const encrypted2 = await encryptAES(maliciousContent, aesKey2);
+      
+      // Try to send different message with same sequence
+      console.log(`🚨 ATTACK: Sending DIFFERENT message with SAME sequence to VICTIM`);
 
       const msg2 = {
-        to: 'bob',
+        to: currentUser, // SAME VICTIM
         encryptedSessionKey: 'key_' + Math.random().toString(36).substring(7),
-        ciphertext: 'MALICIOUS_MESSAGE', // DIFFERENT content
-        iv: 'iv_' + Math.random().toString(36).substring(7),
-        authTag: 'tag_' + Math.random().toString(36).substring(7),
-        nonce: generateRandomNonce(),
+        ciphertext: encrypted2.ciphertext,
+        iv: encrypted2.iv,
+        authTag: encrypted2.authTag,
+        nonce: generateNonce(),
         sequenceNumber: sharedSeq, // SAME sequence
         timestamp: new Date().toISOString()
       };
@@ -464,11 +558,29 @@ export default function ReplayAttackDemo() {
       const attack = {
         id: Date.now() + 3,
         type: 'Same Sequence, Different Nonce',
-        description: 'Attacker sends malicious message with same sequence number as legitimate message',
-        legitimate: { ciphertext: 'ORIGINAL_MESSAGE', seq: sharedSeq },
-        attack: { ciphertext: 'MALICIOUS_MESSAGE', seq: sharedSeq },
-        protection: 'Sequence Number + Nonce Combination',
-        result: resp2.status === 400 ? '✅ BLOCKED' : '❌ FAILED',
+        description: `Attacker (alice) sends malicious message to VICTIM (${currentUser}) with same sequence number as legitimate message`,
+        details: {
+          attacker: 'alice',
+          victim: currentUser,
+          legitimate: { 
+            content: originalContent, 
+            sequence: sharedSeq,
+            ciphertext: encrypted1.ciphertext.substring(0, 50) + '...'
+          },
+          attack: { 
+            content: maliciousContent, 
+            sequence: sharedSeq,
+            ciphertext: encrypted2.ciphertext.substring(0, 50) + '...'
+          },
+          encryptionComparison: {
+            legitimateIV: encrypted1.iv.substring(0, 20) + '...',
+            attackIV: encrypted2.iv.substring(0, 20) + '...',
+            legitimateAuthTag: encrypted1.authTag.substring(0, 20) + '...',
+            attackAuthTag: encrypted2.authTag.substring(0, 20) + '...'
+          }
+        },
+        protection: 'Sequence Number + Nonce Combination - Server tracks sequences per recipient independently',
+        result: resp2.status === 400 ? '✅ VICTIM PROTECTED' : '❌ ATTACK SUCCEEDED',
         message: result2
       };
 
@@ -481,8 +593,7 @@ export default function ReplayAttackDemo() {
   };
 
   const generateRandomNonce = () => {
-    const nonce = window.crypto.getRandomValues(new Uint8Array(16));
-    return btoa(String.fromCharCode(...nonce));
+    return generateNonce();
   };
 
   const clearAttacks = () => {
@@ -502,6 +613,23 @@ export default function ReplayAttackDemo() {
           <p className="text-gray-400">
             Demonstrates how the system prevents replay attacks using nonces, sequence numbers, and timestamps
           </p>
+          
+          {/* Status - Show Attacker and Victim */}
+          <div className="mt-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-gray-500">🔓 Attacker Account:</p>
+                <p className="text-red-400 font-bold">alice</p>
+              </div>
+              <div>
+                <p className="text-gray-500">👤 Victim (Current User):</p>
+                <p className="text-yellow-400 font-bold">{victim || 'Loading...'}</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-600 mt-3">
+              ℹ️ Alice will attempt replay attacks targeting <strong>{victim || 'the logged-in user'}</strong>. The system will demonstrate how these attacks are blocked.
+            </p>
+          </div>
         </div>
 
         {/* Main Content Grid */}

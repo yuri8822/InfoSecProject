@@ -198,22 +198,41 @@ router.post('/messages', async (req, res) => {
         // Check for replay attack: duplicate nonce
         const existingMessage = await Message.findOne({ from: decoded.username, to, nonce });
         if (existingMessage) {
-            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Duplicate nonce detected from ${decoded.username} to ${to}`, decoded.username, 'critical');
-            return res.status(400).json({ message: "Replay attack detected: duplicate nonce" });
+            const blockReason = `DUPLICATE NONCE | Sender: ${decoded.username} | Recipient: ${to} | Nonce: ${nonce.substring(0, 20)}... | Sequence Attempted: ${sequenceNumber} | Previous Sequence: ${existingMessage.sequenceNumber} | Timestamp: ${new Date().toISOString()}`;
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', blockReason, decoded.username, 'critical');
+            return res.status(400).json({ 
+                message: "Replay attack detected: duplicate nonce",
+                blockReason,
+                attemptedData: { nonce: nonce.substring(0, 20) + '...', sequenceNumber, to, timestamp: new Date().toISOString() },
+                existingData: { nonce: existingMessage.nonce.substring(0, 20) + '...', sequenceNumber: existingMessage.sequenceNumber, timestamp: existingMessage.timestamp }
+            });
         }
 
         // Check sequence number (should be incrementing)
         const lastMessage = await Message.findOne({ from: decoded.username, to }).sort({ sequenceNumber: -1 });
         if (lastMessage && sequenceNumber <= lastMessage.sequenceNumber) {
-            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Invalid sequence number from ${decoded.username} to ${to}`, decoded.username, 'critical');
-            return res.status(400).json({ message: "Replay attack detected: invalid sequence" });
+            const blockReason = `SEQUENCE NUMBER REGRESSION | Sender: ${decoded.username} | Recipient: ${to} | Attempted Sequence: ${sequenceNumber} | Last Valid Sequence: ${lastMessage.sequenceNumber} | Nonce: ${nonce.substring(0, 20)}... | Timestamp: ${new Date().toISOString()}`;
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', blockReason, decoded.username, 'critical');
+            return res.status(400).json({ 
+                message: "Replay attack detected: invalid sequence",
+                blockReason,
+                attemptedData: { sequenceNumber, nonce: nonce.substring(0, 20) + '...', to, timestamp: new Date().toISOString() },
+                lastValidData: { sequenceNumber: lastMessage.sequenceNumber, nonce: lastMessage.nonce.substring(0, 20) + '...', timestamp: lastMessage.timestamp }
+            });
         }
 
         // Check timestamp (message shouldn't be older than 5 minutes)
         const messageAge = Date.now() - new Date(req.body.timestamp || Date.now()).getTime();
         if (messageAge > 5 * 60 * 1000) {
-            await createLog(req, 'REPLAY_ATTACK_DETECTED', `Old timestamp from ${decoded.username} to ${to}`, decoded.username, 'warning');
-            return res.status(400).json({ message: "Message timestamp too old" });
+            const blockReason = `TIMESTAMP OUT OF WINDOW | Sender: ${decoded.username} | Recipient: ${to} | Message Age: ${Math.round(messageAge / 1000)} seconds (${(messageAge / 60000).toFixed(1)} minutes) | Max Allowed: 300 seconds (5 minutes) | Message Timestamp: ${req.body.timestamp} | Server Time: ${new Date().toISOString()} | Nonce: ${nonce.substring(0, 20)}...`;
+            await createLog(req, 'REPLAY_ATTACK_DETECTED', blockReason, decoded.username, 'warning');
+            return res.status(400).json({ 
+                message: "Message timestamp too old",
+                blockReason,
+                attemptedData: { messageTimestamp: req.body.timestamp, messageAge: Math.round(messageAge / 1000), nonce: nonce.substring(0, 20) + '...', to },
+                serverTime: new Date().toISOString(),
+                maxAllowedAge: 300
+            });
         }
 
         // Store encrypted message (server cannot decrypt it!)
@@ -232,7 +251,7 @@ router.post('/messages', async (req, res) => {
 
         await message.save();
 
-        await createLog(req, 'MESSAGE_SENT', `Encrypted message sent from ${decoded.username} to ${to}`, decoded.username, 'info');
+        await createLog(req, 'MESSAGE_SENT', `Message Accepted | From: ${decoded.username} | To: ${to} | Nonce: ${nonce.substring(0, 20)}... | Sequence: ${sequenceNumber} | Timestamp: ${new Date().toISOString()} | Ciphertext: ${ciphertext.substring(0, 30)}...`, decoded.username, 'info');
         
         res.status(201).json({ message: "Message sent successfully", messageId: message._id });
 

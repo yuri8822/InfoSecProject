@@ -233,7 +233,7 @@ export default function App() {
             >
               Back to Dashboard
             </button>
-            <ReplayAttackDemo />
+            <ReplayAttackDemo currentUser={user?.username} />
           </div>
         </div>
       )}
