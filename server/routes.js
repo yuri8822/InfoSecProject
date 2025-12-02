@@ -13,13 +13,14 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_project_key_change_this_in_prod";
 
 // Models will be injected via initialization function
-let User, AuditLog, Message, createLog;
+let User, AuditLog, Message, File, createLog;
 
 // Initialize function to set dependencies
-const initialize = (userModel, auditLogModel, messageModel, createLogFn) => {
+const initialize = (userModel, auditLogModel, messageModel, fileModel, createLogFn) => {
     User = userModel;
     AuditLog = auditLogModel;
     Message = messageModel;
+    File = fileModel;
     createLog = createLogFn;
 };
 
@@ -265,6 +266,193 @@ router.get('/messages/:otherUsername', async (req, res) => {
     } catch (err) {
         console.error("Get messages error:", err);
         res.status(500).json({ message: "Server error" });
+    }
+});
+
+/**
+ * =====================================================
+ * PART 5: END-TO-END ENCRYPTED FILE SHARING ROUTES
+ * All file operations preserve end-to-end encryption
+ * Server stores only encrypted data - cannot decrypt
+ * =====================================================
+ */
+
+// 9. UPLOAD ENCRYPTED FILE (Part 5)
+// Client sends pre-encrypted file chunks
+// Server stores them without access to encryption keys
+router.post('/files/upload', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const sender = decoded.username;
+
+        const {
+            fileName,
+            fileSize,
+            fileType,
+            totalChunks,
+            chunkSize,
+            encryptedAESKey,
+            encryptedChunks,
+            recipientUsername
+        } = req.body;
+
+        // Validate recipient exists
+        const recipient = await User.findOne({ username: recipientUsername });
+        if (!recipient) {
+            await createLog(req, 'FILE_UPLOAD_FAIL', `Recipient ${recipientUsername} not found`, sender, 'warning');
+            return res.status(404).json({ message: "Recipient not found" });
+        }
+
+        // Create file document with encrypted chunks
+        const fileDoc = new File({
+            fileName,
+            fileSize,
+            fileType,
+            from: sender,
+            to: recipientUsername,
+            totalChunks,
+            chunkSize,
+            encryptedAESKey, // AES key encrypted with recipient's RSA public key
+            encryptedChunks // Array of encrypted chunks with IV and auth tags
+        });
+
+        await fileDoc.save();
+
+        await createLog(req, 'FILE_UPLOADED', `File "${fileName}" (${fileSize} bytes, ${totalChunks} chunks) uploaded from ${sender} to ${recipientUsername}`, sender, 'info');
+
+        res.status(201).json({
+            message: "File uploaded successfully",
+            fileId: fileDoc._id,
+            totalChunks: encryptedChunks.length
+        });
+
+    } catch (err) {
+        console.error("File upload error:", err);
+        await createLog(req, 'FILE_UPLOAD_ERROR', `File upload error: ${err.message}`, null, 'critical');
+        res.status(500).json({ message: "File upload failed" });
+    }
+});
+
+// 10. GET SHARED FILES LIST (Part 5)
+// Returns list of files shared with the current user
+// All file content remains encrypted
+router.get('/files', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const recipient = decoded.username;
+
+        // Fetch all files shared with this user
+        const files = await File.find({ to: recipient }).select(
+            'fileName fileSize fileType from uploadedAt isDownloaded totalChunks _id'
+        ).sort({ uploadedAt: -1 });
+
+        await createLog(req, 'FILES_LIST_RETRIEVED', `User ${recipient} retrieved shared files list (${files.length} files)`, recipient, 'info');
+
+        res.json(files);
+
+    } catch (err) {
+        console.error("Get files error:", err);
+        res.status(500).json({ message: "Failed to retrieve files" });
+    }
+});
+
+// 11. DOWNLOAD ENCRYPTED FILE (Part 5)
+// Returns fully encrypted file metadata and chunks
+// Client decrypts using their private key
+router.get('/files/download/:fileId', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const recipient = decoded.username;
+        const fileId = req.params.fileId;
+
+        // Find file
+        const file = await File.findById(fileId);
+        if (!file) {
+            await createLog(req, 'FILE_DOWNLOAD_FAIL', `File ${fileId} not found`, recipient, 'warning');
+            return res.status(404).json({ message: "File not found" });
+        }
+
+        // Verify recipient is authorized to download
+        if (file.to !== recipient) {
+            await createLog(req, 'FILE_DOWNLOAD_UNAUTHORIZED', `Unauthorized download attempt for file ${fileId} by ${recipient}`, recipient, 'warning');
+            return res.status(403).json({ message: "Unauthorized to download this file" });
+        }
+
+        // Increment download count and mark as downloaded
+        file.downloads = (file.downloads || 0) + 1;
+        file.isDownloaded = true;
+        await file.save();
+
+        // Return encrypted file metadata and chunks
+        // Client will use their private key to decrypt the AES key
+        // Then use AES key to decrypt each chunk
+        await createLog(req, 'FILE_DOWNLOADED', `File "${file.fileName}" downloaded by ${recipient}`, recipient, 'info');
+
+        res.json({
+            fileName: file.fileName,
+            fileSize: file.fileSize,
+            fileType: file.fileType,
+            from: file.from,
+            totalChunks: file.totalChunks,
+            chunkSize: file.chunkSize,
+            encryptedAESKey: file.encryptedAESKey, // Encrypted with recipient's RSA key
+            encryptedChunks: file.encryptedChunks, // Each chunk encrypted with AES-256-GCM
+            uploadedAt: file.uploadedAt
+        });
+
+    } catch (err) {
+        console.error("File download error:", err);
+        res.status(500).json({ message: "File download failed" });
+    }
+});
+
+// 12. DELETE FILE (Part 5)
+// Only sender can delete shared files
+router.delete('/files/:fileId', async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.sendStatus(401);
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const sender = decoded.username;
+        const fileId = req.params.fileId;
+
+        // Find file
+        const file = await File.findById(fileId);
+        if (!file) {
+            await createLog(req, 'FILE_DELETE_FAIL', `File ${fileId} not found`, sender, 'warning');
+            return res.status(404).json({ message: "File not found" });
+        }
+
+        // Verify sender is authorized to delete
+        if (file.from !== sender) {
+            await createLog(req, 'FILE_DELETE_UNAUTHORIZED', `Unauthorized delete attempt for file ${fileId} by ${sender}`, sender, 'warning');
+            return res.status(403).json({ message: "Only sender can delete files" });
+        }
+
+        // Delete file
+        await File.findByIdAndDelete(fileId);
+
+        await createLog(req, 'FILE_DELETED', `File "${file.fileName}" deleted by ${sender}`, sender, 'info');
+
+        res.json({ message: "File deleted successfully" });
+
+    } catch (err) {
+        console.error("File delete error:", err);
+        res.status(500).json({ message: "File deletion failed" });
     }
 });
 

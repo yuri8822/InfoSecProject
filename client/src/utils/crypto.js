@@ -228,3 +228,204 @@ export const base64ToArrayBuffer = (base64) => {
   }
   return bytes.buffer;
 };
+
+/**
+ * =====================================================
+ * PART 5: END-TO-END ENCRYPTED FILE SHARING
+ * Files encrypted client-side with AES-256-GCM
+ * Split into chunks for efficient processing
+ * =====================================================
+ */
+
+/**
+ * File Chunking: Split file into manageable chunks
+ * Recommended chunk size: 5MB for balanced performance
+ * @param {File} file - File to chunk
+ * @param {number} chunkSize - Size of each chunk in bytes (default: 5MB)
+ * @returns {Array<Blob>} Array of file chunks
+ */
+export const chunkFile = (file, chunkSize = 5 * 1024 * 1024) => {
+  const chunks = [];
+  const fileSize = file.size;
+  let offset = 0;
+
+  while (offset < fileSize) {
+    const end = Math.min(offset + chunkSize, fileSize);
+    chunks.push(file.slice(offset, end));
+    offset = end;
+  }
+
+  return chunks;
+};
+
+/**
+ * Encrypt file chunk with AES-256-GCM
+ * Each chunk gets its own IV and auth tag
+ * @param {Blob} chunk - File chunk to encrypt
+ * @param {CryptoKey} aesKey - AES-256 key
+ * @returns {Object} Contains encrypted chunk, IV, and auth tag in Base64
+ */
+export const encryptFileChunk = async (chunk, aesKey) => {
+  // Read chunk as ArrayBuffer
+  const arrayBuffer = await chunk.arrayBuffer();
+  
+  // Generate random IV (96-bit for GCM)
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  
+  // Encrypt chunk
+  const encryptedData = await window.crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: iv,
+      tagLength: 128 // 128-bit authentication tag
+    },
+    aesKey,
+    arrayBuffer
+  );
+
+  // Extract auth tag (last 16 bytes from encrypted data)
+  const encryptedArray = new Uint8Array(encryptedData);
+  const actualCiphertext = encryptedArray.slice(0, -16);
+  const authTag = encryptedArray.slice(-16);
+
+  return {
+    ciphertext: arrayBufferToBase64(actualCiphertext),
+    iv: arrayBufferToBase64(iv),
+    authTag: arrayBufferToBase64(authTag),
+    chunkSize: chunk.size
+  };
+};
+
+/**
+ * Decrypt file chunk with AES-256-GCM
+ * @param {string} ciphertextB64 - Base64 encoded encrypted chunk
+ * @param {string} ivB64 - Base64 encoded IV
+ * @param {string} authTagB64 - Base64 encoded auth tag
+ * @param {CryptoKey} aesKey - AES-256 key
+ * @returns {ArrayBuffer} Decrypted chunk data
+ */
+export const decryptFileChunk = async (ciphertextB64, ivB64, authTagB64, aesKey) => {
+  const ciphertext = base64ToArrayBuffer(ciphertextB64);
+  const iv = base64ToArrayBuffer(ivB64);
+  const authTag = base64ToArrayBuffer(authTagB64);
+
+  // Combine ciphertext and auth tag for Web Crypto API
+  const combined = new Uint8Array(ciphertext.byteLength + authTag.byteLength);
+  combined.set(new Uint8Array(ciphertext), 0);
+  combined.set(new Uint8Array(authTag), ciphertext.byteLength);
+
+  try {
+    const decrypted = await window.crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: new Uint8Array(iv),
+        tagLength: 128
+      },
+      aesKey,
+      combined
+    );
+
+    return decrypted;
+  } catch (err) {
+    console.error("File chunk decryption failed:", err);
+    throw new Error("Failed to decrypt file chunk - invalid key or corrupted data");
+  }
+};
+
+/**
+ * Encrypt entire file for sharing
+ * - Generates AES-256 session key
+ * - Chunks the file
+ * - Encrypts each chunk
+ * - Encrypts AES key with recipient's RSA public key
+ * @param {File} file - File to encrypt
+ * @param {CryptoKey} recipientPublicKey - Recipient's RSA public key
+ * @param {number} chunkSize - Chunk size in bytes
+ * @returns {Object} Contains file metadata and encrypted chunks
+ */
+export const encryptFileForSharing = async (file, recipientPublicKey, chunkSize = 5 * 1024 * 1024) => {
+  try {
+    // Step 1: Generate AES-256 session key for file encryption
+    const aesKey = await generateAESKey();
+
+    // Step 2: Chunk the file
+    const chunks = chunkFile(file, chunkSize);
+    
+    // Step 3: Encrypt each chunk
+    const encryptedChunks = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const encryptedChunk = await encryptFileChunk(chunks[i], aesKey);
+      encryptedChunks.push({
+        chunkIndex: i,
+        ...encryptedChunk
+      });
+    }
+
+    // Step 4: Encrypt the AES key with recipient's RSA public key (Hybrid Encryption)
+    const encryptedAESKey = await encryptAESKeyWithRSA(aesKey, recipientPublicKey);
+
+    // Step 5: Generate metadata
+    const fileMetadata = {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      totalChunks: chunks.length,
+      chunkSize: chunkSize,
+      encryptedAESKey: encryptedAESKey,
+      encryptedChunks: encryptedChunks,
+      timestamp: new Date().toISOString()
+    };
+
+    return fileMetadata;
+  } catch (err) {
+    console.error("File encryption failed:", err);
+    throw new Error("Failed to encrypt file");
+  }
+};
+
+/**
+ * Decrypt file from shared metadata
+ * - Decrypts AES key using recipient's RSA private key
+ * - Decrypts each chunk
+ * - Reconstructs file from chunks
+ * @param {Object} fileMetadata - Encrypted file metadata from server
+ * @param {CryptoKey} myPrivateKey - User's RSA private key
+ * @returns {Blob} Decrypted file as Blob
+ */
+export const decryptFileFromSharing = async (fileMetadata, myPrivateKey) => {
+  try {
+    // Step 1: Decrypt AES key using private RSA key
+    const aesKey = await decryptAESKeyWithRSA(fileMetadata.encryptedAESKey, myPrivateKey);
+
+    // Step 2: Decrypt each chunk
+    const decryptedChunks = [];
+    for (const encryptedChunk of fileMetadata.encryptedChunks) {
+      const decryptedData = await decryptFileChunk(
+        encryptedChunk.ciphertext,
+        encryptedChunk.iv,
+        encryptedChunk.authTag,
+        aesKey
+      );
+      decryptedChunks.push(new Uint8Array(decryptedData));
+    }
+
+    // Step 3: Reconstruct file from chunks
+    const concatenated = new Uint8Array(
+      decryptedChunks.reduce((acc, chunk) => acc + chunk.length, 0)
+    );
+    
+    let offset = 0;
+    for (const chunk of decryptedChunks) {
+      concatenated.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Step 4: Create Blob from reconstructed data
+    const fileBlob = new Blob([concatenated], { type: fileMetadata.fileType || 'application/octet-stream' });
+
+    return fileBlob;
+  } catch (err) {
+    console.error("File decryption failed:", err);
+    throw new Error("Failed to decrypt file");
+  }
+};
