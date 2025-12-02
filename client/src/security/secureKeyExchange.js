@@ -1,6 +1,4 @@
-// [3] secureKeyExchange.js - Browser-compatible Web Crypto API version
-
-// Key pair utilities for long-term signing keys.
+// Key pair utilities for long-term signing keys (Browser-compatible Web Crypto API).
 
 async function generateLongTermKeyPair() {
   return await window.crypto.subtle.generateKey(
@@ -38,7 +36,7 @@ async function verifySignature(publicKey, data, signature) {
   );
 }
 
-// Ephemeral ECDH utilities for key exchange.
+// Ephemeral ECDH utilities for key exchange (X25519).
 
 async function generateEphemeralECDH() {
   return await window.crypto.subtle.generateKey(
@@ -63,7 +61,6 @@ async function computeSharedSecret(keyPair, peerPublicKey) {
 }
 
 // HKDF key derivation for session keys.
-
 async function deriveSessionKey(sharedSecret, salt, info) {
   // Import the shared secret so we can use it with HKDF.
   const baseKey = await window.crypto.subtle.importKey(
@@ -94,7 +91,6 @@ async function deriveSessionKey(sharedSecret, salt, info) {
 }
 
 // Key confirmation using HMAC.
-
 async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientId) {
   // Import the session key as an HMAC key.
   const hmacKey = await window.crypto.subtle.importKey(
@@ -110,8 +106,8 @@ async function computeKeyConfirmation(sessionKey, label, transcriptHash, clientI
 
   // Concatenate all the inputs.
   const labelBytes = new TextEncoder().encode(label);
-  const transcriptHashBuffer = transcriptHash instanceof ArrayBuffer 
-    ? new Uint8Array(transcriptHash) 
+  const transcriptHashBuffer = transcriptHash instanceof ArrayBuffer
+    ? new Uint8Array(transcriptHash)
     : new Uint8Array(transcriptHash);
   const clientIdBytes = new TextEncoder().encode(clientId);
 
@@ -152,7 +148,6 @@ async function verifyKeyConfirmation(sessionKey, label, transcriptHash, clientId
 }
 
 // Hash utility functions.
-
 async function hashData(data) {
   const dataBuffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
   return await window.crypto.subtle.digest("SHA-256", dataBuffer);
@@ -196,7 +191,7 @@ async function importPublicKey(jwk) {
   );
 }
 
-// Import an X25519 public key from raw bytes.
+// Import an X25519 public key from raw bytes. (Make usage explicit)
 async function importX25519PublicKey(rawKey) {
   return await window.crypto.subtle.importKey(
     "raw",
@@ -204,9 +199,21 @@ async function importX25519PublicKey(rawKey) {
     {
       name: "X25519"
     },
-    true,
-    []
+    false,
+    ["deriveBits"]
   );
+}
+
+// Small helpers for canonicalization.
+function toU8(a) { return a instanceof Uint8Array ? a : new Uint8Array(a); }
+
+function canonicalOrderPair(idA, nonceA, ephA, idB, nonceB, ephB) {
+  // returns ordered [firstEph (Uint8Array), firstNonce (Uint8Array), secondEph, secondNonce]
+  if (idA < idB) {
+    return [ephA, nonceA, ephB, nonceB];
+  } else {
+    return [ephB, nonceB, ephA, nonceA];
+  }
 }
 
 // Custom key exchange protocol implementation.
@@ -332,7 +339,6 @@ class KeyExchange {
   }
 
   // Derive the session key as the responder (after creating response message).
-  // The responder can derive the session key independently since they have all the needed info.
   async deriveSessionKeyAsResponder() {
     if (!this.ephemeral || !this.nonce || !this.peerEphemeral || !this.peerNonce) {
       throw new Error("Missing required data for session key derivation");
@@ -344,27 +350,36 @@ class KeyExchange {
     // Compute the shared secret using ECDH.
     const sharedSecret = await computeSharedSecret(this.ephemeral, peerEphPubKey);
 
-    // Derive the session key using HKDF (same process as finalizeSession).
-    const salt = await hashData(
-      new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
-    );
-    
+    // Use canonical ordering for salt/transcript: order nonces and ephemeral keys by owner ID (alphabetically)
     const ourEphPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ourEphPubArray = new Uint8Array(ourEphPubKey);
-    const transcript = new Uint8Array([
-      ...ourEphPubArray,
-      ...this.nonce,
-      ...new Uint8Array(this.peerEphemeral),
-      ...this.peerNonce
-    ]);
-    // Use canonical ordering for info string (alphabetical) so both parties derive the same key.
-    // For responder: peerId is the initiator, clientId is the responder
-    // We need the same order as initiator uses: "E2EE-Prot v1" + initiatorId + responderId
-    // Since peerId is the initiator and clientId is the responder, we use peerId + clientId
-    // But initiator uses clientId (initiator) + peerId (responder), so we need to match that
-    // Actually, let's use alphabetical order to ensure consistency
-    const ids = [this.peerId, this.clientId].sort();
+    const peerEphU8 = toU8(this.peerEphemeral);
+
+    const [firstEph, firstNonce, secondEph, secondNonce] = canonicalOrderPair(
+      this.clientId, this.nonce, ourEphPubArray,
+      this.peerId, this.peerNonce, peerEphU8
+    );
+
+    // SALT is the hash of concatenated nonces in canonical order.
+    const saltConcat = new Uint8Array(firstNonce.length + secondNonce.length);
+    saltConcat.set(firstNonce, 0);
+    saltConcat.set(secondNonce, firstNonce.length);
+    const salt = await hashData(saltConcat.buffer);
+
+    // Transcript is canonical ordering of ephemeral pubkeys and nonces.
+    const transcript = new Uint8Array(
+      firstEph.length + firstNonce.length + secondEph.length + secondNonce.length
+    );
+    let off = 0;
+    transcript.set(firstEph, off); off += firstEph.length;
+    transcript.set(firstNonce, off); off += firstNonce.length;
+    transcript.set(secondEph, off); off += secondEph.length;
+    transcript.set(secondNonce, off);
+
+    // Info: canonical ids
+    const ids = [this.clientId, this.peerId].sort();
     const info = "E2EE-Prot v1" + ids[0] + ids[1];
+
     this.sessionKey = await deriveSessionKey(sharedSecret, salt, info);
 
     return this.sessionKey;
@@ -418,21 +433,28 @@ class KeyExchange {
     // Compute the shared secret using ECDH.
     const sharedSecret = await computeSharedSecret(this.ephemeral, peerEphPubKey);
 
-    // Derive the session key using HKDF.
-    // Use canonical ordering for salt (alphabetical by clientId) to ensure both parties use same salt.
-    const saltOrder = this.clientId < this.peerId;
-    const salt = await hashData(
-      saltOrder
-        ? new Uint8Array([...this.nonce, ...this.peerNonce]).buffer
-        : new Uint8Array([...this.peerNonce, ...this.nonce]).buffer
+    // Canonical ordering and derivation (same as responder)
+    const peerEphU8 = toU8(peerEphPubBuffer);
+
+    const [firstEph, firstNonce, secondEph, secondNonce] = canonicalOrderPair(
+      this.clientId, this.nonce, ourEphPubArray,
+      this.peerId, this.peerNonce, peerEphU8
     );
-    const transcript = new Uint8Array([
-      ...ourEphPubArray,
-      ...this.nonce,
-      ...new Uint8Array(peerEphPubBuffer),
-      ...this.peerNonce
-    ]);
-    // Use canonical ordering (alphabetical) so both parties derive the same key.
+
+    const saltConcat = new Uint8Array(firstNonce.length + secondNonce.length);
+    saltConcat.set(firstNonce, 0);
+    saltConcat.set(secondNonce, firstNonce.length);
+    const salt = await hashData(saltConcat.buffer);
+
+    const transcript = new Uint8Array(
+      firstEph.length + firstNonce.length + secondEph.length + secondNonce.length
+    );
+    let off2 = 0;
+    transcript.set(firstEph, off2); off2 += firstEph.length;
+    transcript.set(firstNonce, off2); off2 += firstNonce.length;
+    transcript.set(secondEph, off2); off2 += secondEph.length;
+    transcript.set(secondNonce, off2);
+
     const ids = [this.clientId, this.peerId].sort();
     const info = "E2EE-Prot v1" + ids[0] + ids[1];
     this.sessionKey = await deriveSessionKey(sharedSecret, salt, info);
@@ -446,12 +468,22 @@ class KeyExchange {
 
     const ourEphPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ourEphPubArray = new Uint8Array(ourEphPubKey);
-    const transcript = new Uint8Array([
-      ...ourEphPubArray,
-      ...this.nonce,
-      ...new Uint8Array(this.peerEphemeral),
-      ...this.peerNonce
-    ]);
+    const peerEphU8 = toU8(this.peerEphemeral);
+
+    const [firstEph, firstNonce, secondEph, secondNonce] = canonicalOrderPair(
+      this.clientId, this.nonce, ourEphPubArray,
+      this.peerId, this.peerNonce, peerEphU8
+    );
+
+    const transcript = new Uint8Array(
+      firstEph.length + firstNonce.length + secondEph.length + secondNonce.length
+    );
+    let off = 0;
+    transcript.set(firstEph, off); off += firstEph.length;
+    transcript.set(firstNonce, off); off += firstNonce.length;
+    transcript.set(secondEph, off); off += secondEph.length;
+    transcript.set(secondNonce, off);
+
     const transcriptHash = await hashData(transcript.buffer);
     return await computeKeyConfirmation(this.sessionKey, label, transcriptHash, this.clientId);
   }
@@ -462,12 +494,22 @@ class KeyExchange {
 
     const ourEphPubKey = await window.crypto.subtle.exportKey("raw", this.ephemeral.publicKey);
     const ourEphPubArray = new Uint8Array(ourEphPubKey);
-    const transcript = new Uint8Array([
-      ...ourEphPubArray,
-      ...this.nonce,
-      ...new Uint8Array(this.peerEphemeral),
-      ...this.peerNonce
-    ]);
+    const peerEphU8 = toU8(this.peerEphemeral);
+
+    const [firstEph, firstNonce, secondEph, secondNonce] = canonicalOrderPair(
+      this.clientId, this.nonce, ourEphPubArray,
+      this.peerId, this.peerNonce, peerEphU8
+    );
+
+    const transcript = new Uint8Array(
+      firstEph.length + firstNonce.length + secondEph.length + secondNonce.length
+    );
+    let off = 0;
+    transcript.set(firstEph, off); off += firstEph.length;
+    transcript.set(firstNonce, off); off += firstNonce.length;
+    transcript.set(secondEph, off); off += secondEph.length;
+    transcript.set(secondNonce, off);
+
     const transcriptHash = await hashData(transcript.buffer);
     
     const kcBuffer = receivedKC instanceof ArrayBuffer 
@@ -483,7 +525,7 @@ class KeyExchange {
   }
 }
 
-// Export the module.
+// Export the module (browser module style)
 export { 
   KeyExchange,
   generateLongTermKeyPair,

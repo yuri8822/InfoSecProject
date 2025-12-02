@@ -179,6 +179,7 @@ export default function App() {
   const sessionKeys = useRef(new Map()); // Map<peerId, sessionKey ArrayBuffer> - Store established session keys
   const [messages, setMessages] = useState([]); // Messages for current chat
   const [messageInput, setMessageInput] = useState(''); // Current message input
+  const [sendingMessage, setSendingMessage] = useState(false); // Loading state for sending
 
   // NEW: Check for existing session on page load
   useEffect(() => {
@@ -324,6 +325,13 @@ export default function App() {
         // Derive the session key as the responder (we have all the info we need).
         const sessionKey = await keyExchange.deriveSessionKeyAsResponder();
         
+        // Debug: Log session key details
+        const keyBytes = new Uint8Array(sessionKey);
+        console.log(`[RESPONDER] Storing session key for ${msg.from}:`, {
+          keyLength: sessionKey.byteLength,
+          first8Bytes: Array.from(keyBytes.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(':')
+        });
+        
         // Store the session key for message encryption.
         sessionKeys.current.set(msg.from, sessionKey);
         
@@ -382,6 +390,13 @@ export default function App() {
             // Extract response fields (remove 'type' field)
             const { type, ...responseMessage } = messageData;
             const sessionKey = await keyExchange.finalizeSession(responseMessage, peerKeys.signingPublicKey);
+            
+            // Debug: Log session key details
+            const keyBytes = new Uint8Array(sessionKey);
+            console.log(`[INITIATOR] Storing session key for ${msg.from}:`, {
+              keyLength: sessionKey.byteLength,
+              first8Bytes: Array.from(keyBytes.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(':')
+            });
             
             // Store the session key for message encryption.
             sessionKeys.current.set(msg.from, sessionKey);
@@ -687,56 +702,111 @@ export default function App() {
       const res = await fetch(`${API_URL}/messages/${peerUsername}`, {
         headers: { Authorization: `Bearer ${user.token}` }
       });
-      const data = await res.json();
-      if (res.ok) {
-        // Decrypt messages
-        const sessionKey = sessionKeys.current.get(peerUsername);
-        if (!sessionKey) {
-          console.error("No session key for decryption");
+      
+      if (!res.ok) {
+        if (res.status === 404) {
+          // No messages yet, that's okay
+          setMessages([]);
           return;
         }
-
-        const decryptedMessages = await Promise.all(
-          data.messages.map(async (msg) => {
-            try {
-              const plaintext = await decryptMessage(
-                {
-                  ciphertext: msg.ciphertext,
-                  iv: msg.iv,
-                  tag: msg.tag
-                },
-                sessionKey
-              );
-              return {
-                ...msg,
-                plaintext: plaintext,
-                isDecrypted: true
-              };
-            } catch (err) {
-              console.error("Failed to decrypt message:", err);
-              return {
-                ...msg,
-                plaintext: "[Decryption failed]",
-                isDecrypted: false
-              };
-            }
-          })
-        );
-        setMessages(decryptedMessages);
+        console.error("Failed to fetch messages:", res.status, res.statusText);
+        return;
       }
+      
+      const data = await res.json();
+      if (!data || !data.messages) {
+        setMessages([]);
+        return;
+      }
+      
+      // Decrypt messages
+      const sessionKey = sessionKeys.current.get(peerUsername);
+      if (!sessionKey) {
+        console.error("No session key for decryption");
+        setMessages([]);
+        return;
+      }
+      
+      // Debug: Log session key being used for decryption
+      const keyBytes = new Uint8Array(sessionKey);
+      console.log(`[DECRYPT] Using session key for ${peerUsername}:`, {
+        keyLength: sessionKey.byteLength,
+        first8Bytes: Array.from(keyBytes.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(':')
+      });
+
+      const decryptedMessages = await Promise.all(
+        data.messages.map(async (msg) => {
+          try {
+            console.log(`[DECRYPT] Attempting to decrypt message from ${msg.from}:`, {
+              hasSessionKey: !!sessionKey,
+              sessionKeyLength: sessionKey?.byteLength,
+              ciphertextLength: msg.ciphertext?.length,
+              ivLength: msg.iv?.length,
+              tagLength: msg.tag?.length
+            });
+            
+            const plaintext = await decryptMessage(
+              {
+                ciphertext: msg.ciphertext,
+                iv: msg.iv,
+                tag: msg.tag
+              },
+              sessionKey
+            );
+            
+            console.log(`[DECRYPT] Successfully decrypted message from ${msg.from}`);
+            return {
+              ...msg,
+              plaintext: plaintext,
+              isDecrypted: true
+            };
+          } catch (err) {
+            console.error(`[DECRYPT] Failed to decrypt message from ${msg.from}:`, err);
+            console.error(`[DECRYPT] Message details:`, {
+              from: msg.from,
+              to: msg.to,
+              timestamp: msg.timestamp,
+              hasSessionKey: !!sessionKey,
+              sessionKeyLength: sessionKey?.byteLength
+            });
+            return {
+              ...msg,
+              plaintext: `[Decryption failed: ${err.message}]`,
+              isDecrypted: false
+            };
+          }
+        })
+      );
+      setMessages(decryptedMessages);
     } catch (err) {
-      console.error("Fetch messages failed", err);
+      // Handle JSON parse errors (when server returns HTML 404 page)
+      if (err.message.includes('JSON') || err.message.includes('DOCTYPE')) {
+        console.warn("Server returned non-JSON response (likely 404 page), treating as no messages");
+        setMessages([]);
+      } else {
+        console.error("Fetch messages failed", err);
+      }
     }
   };
 
   // Send an encrypted message
   const sendMessage = async (plaintext) => {
+    console.log("sendMessage called with:", { plaintext, user: !!user, chatPeer: chatPeer?.username });
+    
     if (!user || !chatPeer || !plaintext.trim()) {
-      console.error("Cannot send message:", { user: !!user, chatPeer: !!chatPeer, plaintext: plaintext.trim() });
+      const errorMsg = `Cannot send message: user=${!!user}, chatPeer=${!!chatPeer}, plaintext="${plaintext.trim()}"`;
+      console.error(errorMsg);
+      setError(errorMsg);
       return;
     }
 
     const sessionKey = sessionKeys.current.get(chatPeer.username);
+    console.log("Session key check:", {
+      chatPeerUsername: chatPeer.username,
+      hasSessionKey: !!sessionKey,
+      allSessionKeys: Array.from(sessionKeys.current.keys())
+    });
+    
     if (!sessionKey) {
       const errorMsg = "No session key established. Please wait for key exchange to complete.";
       setError(errorMsg);
@@ -744,13 +814,21 @@ export default function App() {
       return;
     }
 
+    setSendingMessage(true);
+    setError(''); // Clear previous errors
+
     try {
-      console.log("Encrypting message for:", chatPeer.username);
+      console.log("Encrypting message for:", chatPeer.username, "Message length:", plaintext.length);
       // Encrypt the message
       const encrypted = await encryptMessage(plaintext, sessionKey);
-      console.log("Message encrypted successfully");
+      console.log("Message encrypted successfully", {
+        ciphertextLength: encrypted.ciphertext.length,
+        ivLength: encrypted.iv.length,
+        tagLength: encrypted.tag.length
+      });
 
       // Send to server
+      console.log("Sending to server:", `${API_URL}/messages/send`);
       const res = await fetch(`${API_URL}/messages/send`, {
         method: "POST",
         headers: {
@@ -765,13 +843,16 @@ export default function App() {
         })
       });
 
+      console.log("Server response:", res.status, res.statusText);
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
         console.error("Failed to send message:", res.status, errorData);
-        throw new Error(errorData.message || "Failed to send message");
+        throw new Error(errorData.message || `Failed to send message (${res.status})`);
       }
 
-      console.log("Message sent successfully");
+      const responseData = await res.json();
+      console.log("Message sent successfully:", responseData);
       
       // Clear input and refresh messages
       setMessageInput('');
@@ -784,6 +865,8 @@ export default function App() {
       console.error("Error sending message:", err);
       setError(err.message);
       logSecurityEvent("MESSAGE_SEND_FAIL", `Failed to send message: ${err.message}`, user.token);
+    } finally {
+      setSendingMessage(false);
     }
   };
 
@@ -1216,16 +1299,39 @@ export default function App() {
               />
               <button
                 type="submit"
-                disabled={!messageInput.trim() || !sessionKeys.current.get(chatPeer.username)}
+                disabled={!messageInput.trim() || !sessionKeys.current.get(chatPeer.username) || sendingMessage}
                 className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors flex items-center gap-2"
               >
-                <Send size={18} />
-                Send
+                {sendingMessage ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Send size={18} />
+                    Send
+                  </>
+                )}
               </button>
             </form>
-            {!sessionKeys.current.get(chatPeer.username) && (
-              <p className="text-xs text-gray-500 mt-2">Establishing secure connection...</p>
-            )}
+            <div className="mt-2 space-y-1">
+              {!sessionKeys.current.get(chatPeer.username) && (
+                <p className="text-xs text-gray-500">Establishing secure connection...</p>
+              )}
+              {sessionKeys.current.get(chatPeer.username) && (
+                <p className="text-xs text-green-600">✓ Secure connection established</p>
+              )}
+              {error && (
+                <div className="p-2 text-xs text-red-600 bg-red-50 rounded">
+                  {error}
+                </div>
+              )}
+              {/* Debug info - remove in production */}
+              <div className="text-xs text-gray-400">
+                Session keys: {Array.from(sessionKeys.current.keys()).join(', ') || 'none'}
+              </div>
+            </div>
           </div>
         </div>
       )}

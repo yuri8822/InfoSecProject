@@ -400,12 +400,16 @@ app.post('/api/messages/send', async (req, res) => {
 // 9. GET MESSAGES (between two users)
 app.get('/api/messages/:peerUsername', async (req, res) => {
     const authHeader = req.headers['authorization'];
-    if (!authHeader) return res.sendStatus(401);
+    if (!authHeader) {
+        return res.status(401).json({ message: "Unauthorized" });
+    }
 
     try {
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, JWT_SECRET);
         const peerUsername = req.params.peerUsername;
+
+        console.log(`[MESSAGES] User ${decoded.username} fetching messages with ${peerUsername}`);
 
         // Get all messages between the two users (bidirectional)
         const messages = await Message.find({
@@ -431,8 +435,31 @@ app.get('/api/messages/:peerUsername', async (req, res) => {
         });
     } catch (e) {
         console.error("Get messages error:", e);
-        res.sendStatus(403);
+        if (e.name === 'JsonWebTokenError' || e.name === 'TokenExpiredError') {
+            return res.status(403).json({ message: "Invalid or expired token" });
+        }
+        res.status(500).json({ message: "Internal server error" });
     }
 });
 
-app.listen(PORT, () => console.log(`Secure Server running on port ${PORT}`));
+// 404 handler for undefined routes
+app.use((req, res) => {
+    console.log(`[404] Route not found: ${req.method} ${req.path}`);
+    res.status(404).json({ message: "Route not found", path: req.path });
+});
+
+app.listen(PORT, () => {
+    console.log(`Secure Server running on port ${PORT}`);
+    console.log(`Available routes:`);
+    console.log(`  POST /api/register`);
+    console.log(`  POST /api/login`);
+    console.log(`  POST /api/log`);
+    console.log(`  GET  /api/logs`);
+    console.log(`  GET  /api/users`);
+    console.log(`  GET  /api/users/:username/public-key`);
+    console.log(`  POST /api/key-exchange/send`);
+    console.log(`  GET  /api/key-exchange/messages`);
+    console.log(`  DELETE /api/key-exchange/messages/:messageId`);
+    console.log(`  POST /api/messages/send`);
+    console.log(`  GET  /api/messages/:peerUsername`);
+});

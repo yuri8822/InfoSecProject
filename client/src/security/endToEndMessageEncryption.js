@@ -70,22 +70,51 @@ async function encryptMessage(plaintext, sessionKey) {
 async function decryptMessage(encryptedData, sessionKey) {
   const { ciphertext, iv, tag } = encryptedData;
 
+  // Validate inputs
+  if (!ciphertext || !iv || !tag) {
+    throw new Error("Missing required encryption data (ciphertext, iv, or tag)");
+  }
+
+  if (!sessionKey || !(sessionKey instanceof ArrayBuffer)) {
+    throw new Error("Session key must be an ArrayBuffer");
+  }
+
   // Convert base64 strings back to ArrayBuffers.
-  const ciphertextBuffer = base64ToArrayBuffer(ciphertext);
-  const ivBuffer = base64ToArrayBuffer(iv);
-  const tagBuffer = base64ToArrayBuffer(tag);
+  let ciphertextBuffer, ivBuffer, tagBuffer;
+  try {
+    ciphertextBuffer = base64ToArrayBuffer(ciphertext);
+    ivBuffer = base64ToArrayBuffer(iv);
+    tagBuffer = base64ToArrayBuffer(tag);
+  } catch (e) {
+    throw new Error(`Failed to decode base64 data: ${e.message}`);
+  }
+
+  // Validate IV length (must be 12 bytes for GCM)
+  if (ivBuffer.byteLength !== 12) {
+    throw new Error(`Invalid IV length: expected 12 bytes, got ${ivBuffer.byteLength}`);
+  }
+
+  // Validate tag length (must be 16 bytes for GCM)
+  if (tagBuffer.byteLength !== 16) {
+    throw new Error(`Invalid tag length: expected 16 bytes, got ${tagBuffer.byteLength}`);
+  }
 
   // Import the session key.
-  const key = await window.crypto.subtle.importKey(
-    "raw",
-    sessionKey,
-    {
-      name: "AES-GCM",
-      length: 256
-    },
-    false,
-    ["decrypt"]
-  );
+  let key;
+  try {
+    key = await window.crypto.subtle.importKey(
+      "raw",
+      sessionKey,
+      {
+        name: "AES-GCM",
+        length: 256
+      },
+      false,
+      ["decrypt"]
+    );
+  } catch (e) {
+    throw new Error(`Failed to import session key: ${e.message}`);
+  }
 
   // Combine ciphertext and tag for decryption.
   const combined = new Uint8Array(ciphertextBuffer.byteLength + tagBuffer.byteLength);
@@ -93,14 +122,21 @@ async function decryptMessage(encryptedData, sessionKey) {
   combined.set(new Uint8Array(tagBuffer), ciphertextBuffer.byteLength);
 
   // Decrypt the message.
-  const decrypted = await window.crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: ivBuffer
-    },
-    key,
-    combined.buffer
-  );
+  let decrypted;
+  try {
+    decrypted = await window.crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: ivBuffer,
+        tagLength: 128 // 16 bytes = 128 bits
+      },
+      key,
+      combined.buffer
+    );
+  } catch (e) {
+    // OperationError typically means authentication failed (wrong key or corrupted data)
+    throw new Error(`Decryption failed: ${e.message}. This usually means the session key doesn't match or the data is corrupted.`);
+  }
 
   // Convert back to string.
   return new TextDecoder().decode(decrypted);
