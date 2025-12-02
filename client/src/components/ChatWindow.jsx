@@ -12,7 +12,11 @@ import {
   Send, 
   CheckCircle,
   AlertTriangle,
-  Loader
+  Loader,
+  FileUp,
+  X,
+  Upload,
+  AlertCircle
 } from 'lucide-react';
 
 import { 
@@ -22,14 +26,19 @@ import {
   encryptAESKeyWithRSA,
   decryptAESKeyWithRSA,
   importPublicKey,
-  generateNonce
+  generateNonce,
+  encryptFileForSharing,
+  decryptFileFromSharing
 } from '../utils/crypto';
 
 import { 
   fetchUserPublicKey,
   sendMessage as apiSendMessage,
   fetchMessages,
-  logSecurityEvent
+  logSecurityEvent,
+  uploadEncryptedFile,
+  logFileSharingEvent,
+  downloadEncryptedFile
 } from '../utils/api';
 
 import { getPrivateKey } from '../utils/indexedDB';
@@ -51,7 +60,15 @@ export default function ChatWindow({ user, recipient, onClose }) {
   const [myPrivateKey, setMyPrivateKey] = useState(null);
   const [sequenceNumber, setSequenceNumber] = useState(0);
   
+  // PART 5: File sharing state in chat
+  const [showFileShareModal, setShowFileShareModal] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileUploadProgress, setFileUploadProgress] = useState(0);
+  const [fileUploading, setFileUploading] = useState(false);
+  const [fileShareStatus, setFileShareStatus] = useState('');
+  
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Initialize secure connection
   useEffect(() => {
@@ -196,8 +213,8 @@ export default function ChatWindow({ user, recipient, onClose }) {
       // Generate nonce for replay protection
       const nonce = generateNonce();
 
-      // Send encrypted message
-      const response = await apiSendMessage({
+      // Prepare message payload
+      const messagePayload = {
         to: recipient.username,
         encryptedSessionKey,
         ciphertext,
@@ -206,7 +223,16 @@ export default function ChatWindow({ user, recipient, onClose }) {
         nonce,
         sequenceNumber,
         timestamp: new Date().toISOString()
-      }, user.token);
+      };
+
+      // Include file metadata if a file was just shared
+      if (window._pendingFileShare) {
+        messagePayload.sharedFile = window._pendingFileShare;
+        window._pendingFileShare = null;
+      }
+
+      // Send encrypted message
+      const response = await apiSendMessage(messagePayload, user.token);
 
       await logSecurityEvent('MESSAGE_ENCRYPTED', `Message encrypted and sent to ${recipient.username}`, user.token);
 
@@ -218,6 +244,8 @@ export default function ChatWindow({ user, recipient, onClose }) {
 
       // Clear input and reload messages
       setNewMessage('');
+      setSelectedFile(null);
+      setFileUploadProgress(0);
       setSequenceNumber(prev => prev + 1);
       setTimeout(loadMessages, 500);
 
@@ -227,6 +255,118 @@ export default function ChatWindow({ user, recipient, onClose }) {
       alert('Failed to send message: ' + err.message);
     } finally {
       setSending(false);
+    }
+  };
+
+  // PART 5: Handle file sharing in chat
+  const handleFileShareClick = () => {
+    setShowFileShareModal(true);
+  };
+
+  const handleFileSelect = (e) => {
+    if (e.target.files?.[0]) {
+      setSelectedFile(e.target.files[0]);
+      setFileShareStatus('');
+    }
+  };
+
+  const handleEncryptAndShareFile = async () => {
+    if (!selectedFile) {
+      setFileShareStatus('Please select a file');
+      return;
+    }
+
+    setFileUploading(true);
+    setFileUploadProgress(0);
+
+    try {
+      // Encrypt file
+      setFileShareStatus('Encrypting file (AES-256-GCM)...');
+      setFileUploadProgress(30);
+
+      const fileMetadata = await encryptFileForSharing(selectedFile, recipientPublicKey);
+
+      setFileUploadProgress(60);
+      setFileShareStatus('Uploading encrypted file...');
+
+      // Upload to server
+      const result = await uploadEncryptedFile(fileMetadata, recipient.username, user.token);
+
+      setFileUploadProgress(90);
+
+      // Log event
+      await logFileSharingEvent(
+        'FILE_SHARED_IN_CHAT',
+        `Shared file "${selectedFile.name}" in chat with ${recipient.username}`,
+        user.token
+      );
+
+      setFileUploadProgress(100);
+      setFileShareStatus(`✅ File "${selectedFile.name}" ready to send!`);
+
+      // Store file info to include in message
+      const fileInfo = {
+        fileId: result.fileId,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type
+      };
+
+      // Create message with file attachment
+      const fileMessage = `📁 [FILE] ${selectedFile.name} (${Math.round(selectedFile.size / 1024 / 1024)}MB)`;
+      setNewMessage(fileMessage);
+      
+      // Store file info temporarily so it can be sent with the message
+      window._pendingFileShare = fileInfo;
+
+      // Auto-close modal and show file is ready
+      setTimeout(() => {
+        setShowFileShareModal(false);
+        setFileShareStatus('Click Send to share the file!');
+        setTimeout(() => setFileShareStatus(''), 3000);
+      }, 1000);
+
+    } catch (err) {
+      console.error('File share failed:', err);
+      setFileShareStatus(`❌ Error: ${err.message}`);
+    } finally {
+      setFileUploading(false);
+    }
+  };
+
+  // PART 6: Handle file download from chat
+  const handleDownloadFile = async (fileMetadata) => {
+    try {
+      console.log('Downloading file:', fileMetadata);
+      
+      // Get user's private key from IndexedDB
+      const privateKey = await getPrivateKey(user.username);
+      if (!privateKey) {
+        throw new Error('Private key not found. Please log in again.');
+      }
+      
+      // Fetch encrypted file from server
+      const encryptedFileData = await downloadEncryptedFile(fileMetadata.fileId, user.token);
+      
+      // Decrypt file
+      console.log('Decrypting file...');
+      const decryptedArrayBuffer = await decryptFileFromSharing(encryptedFileData, privateKey);
+      
+      // Create blob and download
+      const blob = new Blob([decryptedArrayBuffer], { type: fileMetadata.fileType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileMetadata.fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      console.log('File downloaded successfully');
+    } catch (err) {
+      console.error('Failed to download file:', err);
+      alert('Failed to download file: ' + err.message);
     }
   };
 
@@ -304,6 +444,8 @@ export default function ChatWindow({ user, recipient, onClose }) {
           ) : (
             messages.map((msg, idx) => {
               const isMine = msg.from === user.username;
+              const hasSharedFile = msg.sharedFile && msg.sharedFile.fileId;
+              
               return (
                 <div key={idx} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   <div 
@@ -315,8 +457,25 @@ export default function ChatWindow({ user, recipient, onClose }) {
                           : 'bg-red-50 border border-red-200'
                     }`}
                   >
-                    <p className="text-sm">{msg.plaintext}</p>
-                    <div className={`flex items-center gap-1 text-xs mt-1 ${isMine ? 'text-indigo-100' : 'text-gray-400'}`}>
+                    {hasSharedFile ? (
+                      <div>
+                        <p className="text-sm font-semibold mb-2">📁 File Shared</p>
+                        <p className="text-xs mb-2 opacity-80">{msg.sharedFile.fileName}</p>
+                        <p className="text-xs mb-3 opacity-75">
+                          {(msg.sharedFile.fileSize / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                        <button
+                          onClick={() => handleDownloadFile(msg.sharedFile)}
+                          disabled={isMine}
+                          className="px-3 py-1 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-xs rounded transition-colors cursor-pointer"
+                        >
+                          {isMine ? 'Uploaded' : 'Download'}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm">{msg.plaintext}</p>
+                    )}
+                    <div className={`flex items-center gap-1 text-xs mt-2 ${isMine ? 'text-indigo-100' : 'text-gray-400'}`}>
                       <Lock size={10} />
                       <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
                     </div>
@@ -339,6 +498,16 @@ export default function ChatWindow({ user, recipient, onClose }) {
               disabled={securityStatus.step3_encryption !== 'success' || sending}
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none disabled:bg-gray-100"
             />
+            {/* PART 5: File share button in chat */}
+            <button
+              type="button"
+              onClick={handleFileShareClick}
+              disabled={securityStatus.step3_encryption !== 'success' || fileUploading}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg transition-colors flex items-center gap-2"
+              title="Share encrypted file"
+            >
+              <FileUp size={18} />
+            </button>
             <button
               type="submit"
               disabled={!newMessage.trim() || securityStatus.step3_encryption !== 'success' || sending}
@@ -353,6 +522,133 @@ export default function ChatWindow({ user, recipient, onClose }) {
             Messages are encrypted end-to-end using AES-256-GCM + RSA-2048
           </p>
         </form>
+
+        {/* PART 5: File Share Modal */}
+        {showFileShareModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <FileUp className="text-green-600" />
+                  Share Encrypted File
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowFileShareModal(false);
+                    setSelectedFile(null);
+                    setFileShareStatus('');
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <p className="text-sm text-gray-600">
+                File will be encrypted with AES-256-GCM and shared with <strong>{recipient.username}</strong>
+              </p>
+
+              {/* File Input */}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors cursor-pointer"
+              >
+                <Upload size={32} className="mx-auto text-gray-400 mb-2" />
+                <p className="text-sm font-medium text-gray-700">
+                  {selectedFile ? selectedFile.name : 'Click to select file or drag and drop'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {selectedFile ? `${Math.round(selectedFile.size / 1024 / 1024)}MB` : 'Any file type'}
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  onChange={handleFileSelect}
+                  disabled={fileUploading}
+                />
+              </div>
+
+              {/* Progress Bar */}
+              {fileUploadProgress > 0 && (
+                <div className="space-y-2">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${fileUploadProgress}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-500 text-center">{fileUploadProgress}%</p>
+                </div>
+              )}
+
+              {/* Status Message */}
+              {fileShareStatus && (
+                <div className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+                  fileShareStatus.includes('✅') 
+                    ? 'bg-green-50 text-green-800 border border-green-200'
+                    : fileShareStatus.includes('❌')
+                    ? 'bg-red-50 text-red-800 border border-red-200'
+                    : 'bg-blue-50 text-blue-800 border border-blue-200'
+                }`}>
+                  {fileShareStatus.includes('✅') ? (
+                    <CheckCircle size={16} />
+                  ) : fileShareStatus.includes('❌') ? (
+                    <AlertCircle size={16} />
+                  ) : (
+                    <Loader size={16} className="animate-spin" />
+                  )}
+                  {fileShareStatus}
+                </div>
+              )}
+
+              {/* Security Info */}
+              <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+                <p className="text-xs text-green-800 flex items-center gap-1 mb-1">
+                  <Lock size={12} />
+                  <strong>Encryption Details:</strong>
+                </p>
+                <ul className="text-xs text-green-700 space-y-0.5 list-disc list-inside">
+                  <li>AES-256-GCM per chunk</li>
+                  <li>RSA-2048 key encryption</li>
+                  <li>Server stores encrypted only</li>
+                </ul>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => {
+                    setShowFileShareModal(false);
+                    setSelectedFile(null);
+                    setFileShareStatus('');
+                  }}
+                  disabled={fileUploading}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:text-gray-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleEncryptAndShareFile}
+                  disabled={!selectedFile || fileUploading}
+                  className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  {fileUploading ? (
+                    <>
+                      <Loader size={16} className="animate-spin" />
+                      Encrypting...
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={16} />
+                      Encrypt & Share
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

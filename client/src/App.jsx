@@ -24,8 +24,6 @@ import {
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
 import ChatWindow from './components/ChatWindow';
-// PART 5: File Sharing Component
-import FileSharing from './components/FileSharing';
 
 export default function App() {
   const [view, setView] = useState('login'); // login, register, dashboard
@@ -36,8 +34,6 @@ export default function App() {
   const [users, setUsers] = useState([]); // List of all registered users
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
   const [showChat, setShowChat] = useState(false); // Show chat window
-  // PART 5: Tab management for dashboard
-  const [dashboardTab, setDashboardTab] = useState('overview'); // overview, files
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -212,52 +208,18 @@ export default function App() {
       )}
       
       {view === 'dashboard' && (
-        <div className="w-full flex flex-col">
-          {/* PART 5: Dashboard Tabs */}
-          <div className="mb-6 flex gap-2 border-b border-gray-200">
-            <button
-              onClick={() => setDashboardTab('overview')}
-              className={`px-4 py-3 font-medium transition-colors ${
-                dashboardTab === 'overview'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              Overview & Chat
-            </button>
-            <button
-              onClick={() => setDashboardTab('files')}
-              className={`px-4 py-3 font-medium transition-colors ${
-                dashboardTab === 'files'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              🔒 File Sharing (E2EE)
-            </button>
-          </div>
-
-          {/* Dashboard Overview Tab */}
-          {dashboardTab === 'overview' && (
-            <Dashboard 
-              user={user}
-              keyStatus={keyStatus}
-              logs={logs}
-              users={users}
-              selectedUser={selectedUser}
-              onLogout={handleLogout}
-              onRefreshLogs={handleFetchLogs}
-              onRefreshUsers={handleFetchUsers}
-              onSelectUser={setSelectedUser}
-              onFetchPublicKey={handleFetchPublicKey}
-            />
-          )}
-
-          {/* PART 5: File Sharing Tab */}
-          {dashboardTab === 'files' && (
-            <FileSharing user={user} />
-          )}
-        </div>
+        <Dashboard 
+          user={user}
+          keyStatus={keyStatus}
+          logs={logs}
+          users={users}
+          selectedUser={selectedUser}
+          onLogout={handleLogout}
+          onRefreshLogs={handleFetchLogs}
+          onRefreshUsers={handleFetchUsers}
+          onSelectUser={setSelectedUser}
+          onFetchPublicKey={handleFetchPublicKey}
+        />
       )}
 
       {/* Chat Window Modal */}

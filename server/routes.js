@@ -189,7 +189,7 @@ router.post('/messages', async (req, res) => {
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, JWT_SECRET);
         
-        const { to, encryptedSessionKey, ciphertext, iv, authTag, nonce, sequenceNumber } = req.body;
+        const { to, encryptedSessionKey, ciphertext, iv, authTag, nonce, sequenceNumber, sharedFile } = req.body;
 
         if (!to || !encryptedSessionKey || !ciphertext || !iv || !authTag || !nonce || sequenceNumber === undefined) {
             return res.status(400).json({ message: "Missing required fields" });
@@ -226,7 +226,8 @@ router.post('/messages', async (req, res) => {
             authTag,
             nonce,
             sequenceNumber,
-            timestamp: new Date()
+            timestamp: new Date(),
+            sharedFile: sharedFile || null // Include file metadata if present
         });
 
         await message.save();
