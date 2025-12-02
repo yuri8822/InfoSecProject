@@ -19,7 +19,9 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
     origin: process.env.CORS_ORIGIN || 'http://localhost:5173'
 }));
-app.use(express.json());
+// Increase JSON payload limit for encrypted file uploads (PART 5)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb' }));
 
 // --- MONGODB CONNECTION ---
 mongoose.connect(process.env.MONGODB_URI, {
@@ -61,9 +63,38 @@ const messageSchema = new mongoose.Schema({
     sequenceNumber: { type: Number, required: true }, // For replay attack protection
 });
 
+/**
+ * PART 5: File Schema for End-to-End Encrypted File Sharing
+ * Stores encrypted files with metadata
+ * Only server stores encrypted chunks - cannot decrypt them
+ * Decryption happens exclusively on client-side
+ */
+const fileSchema = new mongoose.Schema({
+    fileName: { type: String, required: true }, // Original file name (encrypted with AES by client)
+    fileSize: { type: Number, required: true }, // Original file size
+    fileType: { type: String }, // MIME type
+    from: { type: String, required: true }, // Sender username
+    to: { type: String, required: true }, // Recipient username
+    totalChunks: { type: Number, required: true }, // Number of encrypted chunks
+    chunkSize: { type: Number, required: true }, // Size of each chunk in bytes
+    encryptedAESKey: { type: String, required: true }, // AES key encrypted with recipient's RSA public key
+    encryptedChunks: [{
+        chunkIndex: { type: Number, required: true },
+        ciphertext: { type: String, required: true }, // Encrypted chunk (Base64)
+        iv: { type: String, required: true }, // Initialization Vector (Base64)
+        authTag: { type: String, required: true }, // Authentication tag (Base64)
+        chunkSize: { type: Number }
+    }],
+    uploadedAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date, default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) }, // 30-day expiry
+    downloads: { type: Number, default: 0 }, // Track number of downloads
+    isDownloaded: { type: Boolean, default: false } // Mark if recipient has downloaded
+});
+
 const User = mongoose.model('User', userSchema);
 const AuditLog = mongoose.model('AuditLog', logSchema);
 const Message = mongoose.model('Message', messageSchema);
+const File = mongoose.model('File', fileSchema);
 
 // --- HELPER: LOGGING ---
 const createLog = async (req, type, details, username = null, severity = 'info') => {
@@ -83,7 +114,8 @@ const createLog = async (req, type, details, username = null, severity = 'info')
 };
 
 // Initialize routes with models and logging function
-initializeRoutes(User, AuditLog, Message, createLog);
+// Pass File model for file sharing functionality (Part 5)
+initializeRoutes(User, AuditLog, Message, File, createLog);
 
 // Mount API routes
 app.use('/api', apiRouter);
