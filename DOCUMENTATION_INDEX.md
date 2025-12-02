@@ -49,7 +49,31 @@
 
 ---
 
-## 🖥️ Live Logs Feature Documentation
+## 🕵️ MITM (Man-in-the-Middle) Attack Documentation
+
+### Quick Start
+- **[MITM_ATTACK_GUIDE.md](MITM_ATTACK_GUIDE.md)** ⭐
+  - Complete guide to MITM attacks
+  - How attacks work without signatures
+  - How signatures prevent attacks
+  - Interactive demonstration guide
+
+### Implementation Details
+- **[MITM_ATTACK_IMPLEMENTATION_SUMMARY.md](MITM_ATTACK_IMPLEMENTATION_SUMMARY.md)**
+  - Component architecture
+  - How to run the demo
+  - Technical deep dive
+  - Console output examples
+
+### Complete Report
+- **[MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md](MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md)**
+  - Executive summary
+  - Feature breakdown
+  - Integration points
+  - Security concepts taught
+  - Testing procedures
+
+---
 
 ### Implementation Details
 - **[LIVE_LOGS_IMPLEMENTATION.md](LIVE_LOGS_IMPLEMENTATION.md)**
@@ -190,19 +214,30 @@
 
 ---
 
+### Path 6: I Want to Understand MITM Attacks (New)
+1. [MITM_ATTACK_GUIDE.md](MITM_ATTACK_GUIDE.md) - Concepts & vulnerabilities (10 min)
+2. [MITM_ATTACK_IMPLEMENTATION_SUMMARY.md](MITM_ATTACK_IMPLEMENTATION_SUMMARY.md) - How it's implemented (15 min)
+3. [MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md](MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md) - Full technical analysis (20 min)
+4. Run the demo in Dashboard (10 min)
+
+**Total Time: 55 minutes**
+
+---
+
 ## 📊 Documentation Statistics
 
 | Metric | Value |
 |--------|-------|
-| Total Documents | 20 |
+| Total Documents | 23 |
 | New Documents (This Phase) | 8 |
-| Total Lines | 3,600+ |
-| New Lines (This Phase) | 2,100+ |
-| Code Files | 2 main (modified 1) |
+| MITM Demo Documents | 3 |
+| Total Lines | 4,100+ |
+| New Lines (This Phase) | 2,400+ |
+| Code Files | 3 main (modified 2) |
 | Database Collections | 4 |
 | API Endpoints | 12 |
 | Protection Layers | 4 |
-| Attack Scenarios | 4 |
+| Attack Scenarios | 7 (4 replay + 3 MITM) |
 | Attack Success Rate | 0% (100% blocked) |
 
 ---
@@ -237,9 +272,16 @@
 - Architecture: [COMPLETE_SYSTEM_ARCHITECTURE.md](COMPLETE_SYSTEM_ARCHITECTURE.md)
 
 **Attack Scenarios**
-- All 4 attacks: [REPLAY_ATTACK_TEST_REPORT.md](REPLAY_ATTACK_TEST_REPORT.md)
+- All 4 replay attacks: [REPLAY_ATTACK_TEST_REPORT.md](REPLAY_ATTACK_TEST_REPORT.md)
 - Visualized: [REPLAY_ATTACK_VISUAL_DIAGRAMS.md](REPLAY_ATTACK_VISUAL_DIAGRAMS.md)
 - Tested: [QUICK_VERIFICATION_GUIDE.md](QUICK_VERIFICATION_GUIDE.md)
+- MITM attacks: [MITM_ATTACK_GUIDE.md](MITM_ATTACK_GUIDE.md)
+- MITM implementation: [MITM_ATTACK_IMPLEMENTATION_SUMMARY.md](MITM_ATTACK_IMPLEMENTATION_SUMMARY.md)
+
+**Digital Signatures**
+- How signatures prevent MITM: [MITM_ATTACK_GUIDE.md](MITM_ATTACK_GUIDE.md#how-digital-signatures-prevent-mitm)
+- Signature verification: [MITM_ATTACK_IMPLEMENTATION_SUMMARY.md](MITM_ATTACK_IMPLEMENTATION_SUMMARY.md#attack-2-mitm-prevented-by-digital-signatures)
+- Technical details: [MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md](MITM_ATTACK_COMPLETE_IMPLEMENTATION_REPORT.md)
 
 ---
 
@@ -313,6 +355,7 @@
 2. **[QUICK_VERIFICATION_GUIDE.md](QUICK_VERIFICATION_GUIDE.md)** - Test it works
 3. **[COMPLETE_SYSTEM_ARCHITECTURE.md](COMPLETE_SYSTEM_ARCHITECTURE.md)** - Understand how it works
 4. **[IMPLEMENTATION_COMPLETE_CHECKLIST.md](IMPLEMENTATION_COMPLETE_CHECKLIST.md)** - Verify everything
+5. **[MITM_ATTACK_GUIDE.md](MITM_ATTACK_GUIDE.md)** - NEW: Learn about MITM attacks
 
 ### Most Detailed Files 📖
 1. **[REPLAY_ATTACK_TEST_REPORT.md](REPLAY_ATTACK_TEST_REPORT.md)** - 500+ lines of test results

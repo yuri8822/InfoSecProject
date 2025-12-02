@@ -17,7 +17,8 @@ export default function Dashboard({
   onRefreshUsers,
   onSelectUser,
   onFetchPublicKey,
-  onShowReplayDemo
+  onShowReplayDemo,
+  onShowMITMDemo
 }) {
   return (
     <div className="w-full max-w-5xl space-y-6">
@@ -35,6 +36,16 @@ export default function Dashboard({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {onShowMITMDemo && (
+            <button 
+              onClick={onShowMITMDemo}
+              className="flex items-center gap-2 px-4 py-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+              title="Demonstrate MITM attack protection"
+            >
+              <AlertTriangle size={18} />
+              MITM Demo
+            </button>
+          )}
           {onShowReplayDemo && (
             <button 
               onClick={onShowReplayDemo}
