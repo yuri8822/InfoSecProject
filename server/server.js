@@ -6,23 +6,25 @@
  * 3. Key Public Storage (Storing the public half of the asymmetric pair)
  */
 
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt'); // Using bcrypt for secure password hashing
-const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const { router: apiRouter, initialize: initializeRoutes } = require('./routes');
 
 const app = express();
-const PORT = 5000;
-const JWT_SECRET = "super_secret_project_key_change_this_in_prod"; // In production, use ENV var
+const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN || 'http://localhost:5173'
+}));
+// Increase JSON payload limit for encrypted file uploads (PART 5)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb' }));
 
 // --- MONGODB CONNECTION ---
-// Replace with your local or Atlas connection string
-mongoose.connect('mongodb://127.0.0.1:27017/infosec_project', {
+mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true
 }).then(() => console.log("Connected to MongoDB"))
@@ -34,7 +36,8 @@ mongoose.connect('mongodb://127.0.0.1:27017/infosec_project', {
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     passwordHash: { type: String, required: true }, // Store HASH, not plaintext
-    publicKey: { type: Object, required: true }, // JWK Format
+    publicKey: { type: Object, required: true }, // RSA public key (JWK Format)
+    longTermSigningPublicKey: { type: Object }, // ECDSA public key (JWK Format) for key exchange
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -48,8 +51,96 @@ const logSchema = new mongoose.Schema({
     severity: { type: String, enum: ['info', 'warning', 'critical'], default: 'info' }
 });
 
+// Message Schema (Part 4: End-to-End Encrypted Messages)
+const messageSchema = new mongoose.Schema({
+    from: { type: String, required: true },
+    to: { type: String, required: true },
+    encryptedSessionKey: { type: String }, // AES key encrypted with recipient's RSA public key (optional for session key messages)
+    ciphertext: { type: String, required: true }, // Message encrypted with AES-GCM
+    iv: { type: String, required: true }, // Initialization Vector for AES-GCM
+    authTag: { type: String, required: true }, // Authentication tag from AES-GCM
+    nonce: { type: String, required: true }, // For replay attack protection
+    timestamp: { type: Date, default: Date.now },
+    sequenceNumber: { type: Number, required: true }, // For replay attack protection
+    usesSessionKey: { type: Boolean, default: false }, // Flag for session key usage (from key exchange)
+    sharedFile: { // Optional: file shared with this message
+        fileId: { type: String }, // Reference to File document
+        fileName: { type: String },
+        fileSize: { type: Number },
+        fileType: { type: String }
+    }
+});
+
+/**
+ * PART 5: File Schema for End-to-End Encrypted File Sharing
+ * Stores encrypted files with metadata
+ * Only server stores encrypted chunks - cannot decrypt them
+ * Decryption happens exclusively on client-side
+ */
+const fileSchema = new mongoose.Schema({
+    fileName: { type: String, required: true }, // Original file name (encrypted with AES by client)
+    fileSize: { type: Number, required: true }, // Original file size
+    fileType: { type: String }, // MIME type
+    from: { type: String, required: true }, // Sender username
+    to: { type: String, required: true }, // Recipient username
+    totalChunks: { type: Number, required: true }, // Number of encrypted chunks
+    chunkSize: { type: Number, required: true }, // Size of each chunk in bytes
+    encryptedAESKey: { type: String, required: true }, // AES key encrypted with recipient's RSA public key
+    encryptedChunks: [{
+        chunkIndex: { type: Number, required: true },
+        ciphertext: { type: String, required: true }, // Encrypted chunk (Base64)
+        iv: { type: String, required: true }, // Initialization Vector (Base64)
+        authTag: { type: String, required: true }, // Authentication tag (Base64)
+        chunkSize: { type: Number }
+    }],
+    uploadedAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date, default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) }, // 30-day expiry
+    downloads: { type: Number, default: 0 }, // Track number of downloads
+    isDownloaded: { type: Boolean, default: false } // Mark if recipient has downloaded
+});
+
+/**
+ * Key Exchange Session Schema
+ * Tracks key exchange protocol state between two users
+ */
+const keyExchangeSessionSchema = new mongoose.Schema({
+    sessionId: { type: String, required: true, unique: true },
+    initiator: { type: String, required: true }, // Username of initiator
+    responder: { type: String, required: true }, // Username of responder
+    status: { 
+        type: String, 
+        enum: ['hello_sent', 'response_sent', 'confirmed', 'failed', 'expired'],
+        default: 'hello_sent'
+    },
+    kxHello: {
+        id: String,
+        ephPub: Object, // Ephemeral ECDH public key (JWK)
+        longTermPub: Object, // Long-term ECDSA public key (JWK)
+        nonce: String,
+        signature: String
+    },
+    kxResponse: {
+        id: String,
+        ephPub: Object,
+        longTermPub: Object,
+        nonce: String,
+        signature: String
+    },
+    kxConfirm: {
+        confirmTag: String, // HMAC confirmation tag
+        from: String // Who sent the confirmation
+    },
+    salt: { type: String }, // HKDF salt (shared between parties)
+    createdAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date, default: () => new Date(Date.now() + 5 * 60 * 1000) }, // 5 min expiry
+    completedAt: { type: Date }
+});
+
 const User = mongoose.model('User', userSchema);
 const AuditLog = mongoose.model('AuditLog', logSchema);
+const Message = mongoose.model('Message', messageSchema);
+const File = mongoose.model('File', fileSchema);
+const KeyExchangeSession = mongoose.model('KeyExchangeSession', keyExchangeSessionSchema);
 
 // --- HELPER: LOGGING ---
 const createLog = async (req, type, details, username = null, severity = 'info') => {
@@ -68,112 +159,12 @@ const createLog = async (req, type, details, username = null, severity = 'info')
     }
 };
 
-// --- ROUTES ---
+// Initialize routes with models and logging function
+// Pass File model for file sharing functionality (Part 5)
+// Pass KeyExchangeSession for key exchange protocol (Part 3)
+initializeRoutes(User, AuditLog, Message, File, KeyExchangeSession, createLog);
 
-// 1. REGISTER
-app.post('/api/register', async (req, res) => {
-    const { username, password, publicKey } = req.body;
-
-    if (!username || !password || !publicKey) {
-        return res.status(400).json({ message: "Missing fields" });
-    }
-
-    try {
-        // Check existing
-        const existing = await User.findOne({ username });
-        if (existing) {
-            await createLog(req, 'AUTH_REGISTER_FAIL', `Attempt to register existing user: ${username}`, null, 'warning');
-            return res.status(400).json({ message: "Username exists" });
-        }
-
-        // Hash Password (Bcrypt)
-        const saltRounds = 10;
-        const passwordHash = await bcrypt.hash(password, saltRounds);
-
-        // Create User
-        const newUser = new User({
-            username,
-            passwordHash,
-            publicKey
-        });
-        await newUser.save();
-
-        await createLog(req, 'AUTH_REGISTER_SUCCESS', `User registered and Public Key stored`, username, 'info');
-
-        res.status(201).json({ message: "User registered successfully" });
-
-    } catch (err) {
-        await createLog(req, 'SYSTEM_ERROR', `Registration error: ${err.message}`, null, 'critical');
-        res.status(500).json({ message: "Server error" });
-    }
-});
-
-// 2. LOGIN
-app.post('/api/login', async (req, res) => {
-    const { username, password } = req.body;
-
-    try {
-        const user = await User.findOne({ username });
-        if (!user) {
-            await createLog(req, 'AUTH_FAIL', `Login failed (User not found): ${username}`, null, 'warning');
-            return res.status(401).json({ message: "Invalid credentials" });
-        }
-
-        // Verify Password
-        const match = await bcrypt.compare(password, user.passwordHash);
-        if (!match) {
-            await createLog(req, 'AUTH_FAIL', `Login failed (Invalid password): ${username}`, username, 'warning');
-            return res.status(401).json({ message: "Invalid credentials" });
-        }
-
-        // Generate Token
-        const token = jwt.sign({ userId: user._id, username }, JWT_SECRET, { expiresIn: '1h' });
-
-        await createLog(req, 'AUTH_SUCCESS', `User logged in successfully`, username, 'info');
-        res.json({ token, username });
-
-    } catch (err) {
-        res.status(500).json({ message: "Server error" });
-    }
-});
-
-// 3. LOG INGESTION (For Client-Side Security Events)
-// Clients hit this endpoint to report failed decryptions, replay attacks, etc.
-app.post('/api/log', async (req, res) => {
-    // Verify JWT if present (optional but recommended)
-    const authHeader = req.headers['authorization'];
-    let username = 'anonymous';
-
-    if (authHeader) {
-        try {
-            const token = authHeader.split(' ')[1];
-            const decoded = jwt.verify(token, JWT_SECRET);
-            username = decoded.username;
-        } catch (e) {
-            // Invalid token
-        }
-    }
-
-    const { type, details, severity } = req.body;
-    await createLog(req, type, details, username, severity || 'info');
-    res.sendStatus(200);
-});
-
-// 4. FETCH LOGS (For Dashboard Visualization)
-app.get('/api/logs', async (req, res) => {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader) return res.sendStatus(401);
-
-    try {
-        const token = authHeader.split(' ')[1];
-        jwt.verify(token, JWT_SECRET); // Verify token
-
-        // Return last 50 logs desc
-        const logs = await AuditLog.find().sort({ timestamp: -1 }).limit(50);
-        res.json(logs);
-    } catch (e) {
-        res.sendStatus(403);
-    }
-});
+// Mount API routes
+app.use('/api', apiRouter);
 
 app.listen(PORT, () => console.log(`Secure Server running on port ${PORT}`));
