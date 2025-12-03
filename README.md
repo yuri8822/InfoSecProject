@@ -49,17 +49,7 @@ git clone https://github.com/yuri8822/InfoSecProject.gitcd InfoSecProject
 
 ### 2. Environment Configuration
 
-Create `.env` file in the `server/` directory:
-
-```bash
-# server/.envNODE_ENV=developmentPORT=5000MONGODB_URI=mongodb://localhost:27017/infosec-dbJWT_SECRET=your-super-secret-jwt-key-change-this-in-productionCORS_ORIGIN=http://localhost:5173
-```
-
-For MongoDB Atlas (cloud):
-
-```bash
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/infosec-db
-```
+Create `.env` file in the `server/` directory with your configuration values (see Environment Variables section below).
 
 ### 3. Install Dependencies
 
@@ -130,11 +120,7 @@ This launches both server and client in separate command windows.
     -   **Build Command**: `cd server && npm install`
     -   **Start Command**: `cd server && npm start`
     -   **Instance Type**: Free
-5.  Add Environment Variables:
-    
-    ```
-    NODE_ENV=productionPORT=5000MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/infosec-dbJWT_SECRET=generate-a-random-secret-key-hereCORS_ORIGIN=https://your-frontend-url.onrender.com
-    ```
+5.  Add Environment Variables (see Environment Variables section below).
     
 6.  Click "Create Web Service" and wait for deployment
     
@@ -171,12 +157,6 @@ This launches both server and client in separate command windows.
 -   Visit your frontend URL
 -   Test user registration and login
 -   Check Render logs if issues occur
-
-## Project Structure
-
-```
-InfoSecProject/├── client/                          # React frontend│   ├── src/│   │   ├── components/              # React components│   │   │   ├── AuthForm.jsx        # Login/Register│   │   │   ├── ChatWindow.jsx      # Messaging UI│   │   │   ├── Dashboard.jsx       # Main dashboard│   │   │   ├── FileSharing.jsx     # File transfer│   │   │   ├── MitmAttackDemo.jsx  # MITM demonstration│   │   │   └── ReplayAttackDemo.jsx # Replay attack demo│   │   ├── utils/│   │   │   ├── api.js              # API calls│   │   │   ├── config.js           # Configuration│   │   │   ├── crypto.js           # Encryption functions│   │   │   ├── indexedDB.js        # Local storage│   │   │   └── keyExchangeState.js # Key exchange state│   │   ├── App.jsx                 # Main App component│   │   └── main.jsx                # Entry point│   ├── package.json│   ├── vite.config.js│   └── index.html│├── server/                          # Node.js backend│   ├── server.js                   # Main server setup│   ├── routes.js                   # API routes│   ├── package.json│   └── .env                        # Environment variables│├── run.bat                         # Windows batch script└── README.md
-```
 
 ## Security Features Explained
 
@@ -286,12 +266,16 @@ Run `npm install` in both `client/` and `server/` directories
 
 ### Backend (.env in server/)
 
-```
-NODE_ENV              # development or productionPORT                  # Server port (default: 5000)MONGODB_URI          # MongoDB connection stringJWT_SECRET           # Secret key for JWT signingCORS_ORIGIN          # Allowed frontend URL for CORS
-```
+| Variable | Description |
+|----------|-------------|
+| `NODE_ENV` | Environment mode (development or production) |
+| `PORT` | Server port (default: 5000) |
+| `MONGODB_URI` | MongoDB connection string |
+| `JWT_SECRET` | Secret key for JWT signing |
+| `CORS_ORIGIN` | Allowed frontend URL |
 
 ### Frontend (.env in client/)
 
-```
-VITE_API_URL         # Backend API URL (optional, falls back to config.js)
-```
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_URL` | Backend API URL (optional, falls back to config.js) |
