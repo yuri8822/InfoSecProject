@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ShieldAlert,
   UserCheck,
@@ -31,15 +31,26 @@ const logEntry = (setLogs, message) => {
 };
 
 export default function MitmAttackDemo({ onClose, context }) {
+  const sessionUser = useMemo(() => {
+    try {
+      const stored = localStorage.getItem('secure_user_session');
+      return stored ? JSON.parse(stored) : null;
+    } catch (err) {
+      console.warn('Failed to parse stored session for MITM demo:', err);
+      return null;
+    }
+  }, []);
+
   const [insecureLogs, setInsecureLogs] = useState([]);
   const [secureLogs, setSecureLogs] = useState([]);
   const [insecureStatus, setInsecureStatus] = useState('idle');
   const [secureStatus, setSecureStatus] = useState('idle');
 
-  const victim = context?.victim || 'Alice';
+  // Always treat the signed-in user as the victim so the story matches the active session.
+  const victim = sessionUser?.username || context?.victim || 'Alice';
   const attackerName = context?.attacker || 'Any Registered User';
   const attackerLabel = 'Attacker';
-  const token = context?.token || null;
+  const token = sessionUser?.token || context?.token || null;
   const pretendPeer = 'SecureChatPeer';
 
   const runInsecureAttack = async () => {

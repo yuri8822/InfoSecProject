@@ -47,6 +47,8 @@ export default function ReplayAttackDemo() {
   const [showLogs, setShowLogs] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [sessionUser, setSessionUser] = useState(null);
+  const [tokenSource, setTokenSource] = useState(null); // 'session' or 'demo'
 
   // Mock user for testing
   const mockUser = {
@@ -71,6 +73,8 @@ export default function ReplayAttackDemo() {
         const data = await response.json();
         console.log('✅ Authentication successful, token:', data.token.substring(0, 20) + '...');
         setToken(data.token);
+        setSessionUser(mockUser.username);
+        setTokenSource('demo');
         localStorage.setItem('token', data.token);
         setAuthError('');
         return data.token;
@@ -131,7 +135,11 @@ export default function ReplayAttackDemo() {
   const fetchServerLogs = async (authToken) => {
     setLogsLoading(true);
     try {
-      const tokenToUse = authToken || token;
+      // If called from a click handler, React will pass the event object as the first
+      // argument. We only want to treat the argument as a token if it's a string.
+      const tokenToUse = typeof authToken === 'string' && authToken.length > 0
+        ? authToken
+        : token;
       if (!tokenToUse) {
         console.log('⏭️ Skipping logs fetch - no token yet');
         setLogsLoading(false);
@@ -139,8 +147,26 @@ export default function ReplayAttackDemo() {
       }
 
       const response = await fetch('http://localhost:5000/api/logs', {
-        headers: { 'Authorization': `Bearer ${tokenToUse}` }
+        headers: { Authorization: `Bearer ${tokenToUse}` },
       });
+
+      if (response.status === 401 || response.status === 403) {
+        if (tokenSource === 'session') {
+          console.warn('Session token invalid for replay demo. Prompting user to re-login.');
+          setAuthError('Session expired. Please log out/in and reopen the replay demo.');
+        } else {
+          console.warn('🔄 Token invalid or expired when fetching logs, re-authenticating demo user...');
+          // Clear any bad token and try to re-authenticate once
+          localStorage.removeItem('token');
+          setToken('');
+          const newToken = await authenticate();
+          if (newToken) {
+            await fetchServerLogs(newToken);
+          }
+        }
+        return;
+      }
+
       if (response.ok) {
         const logs = await response.json();
         console.log('📊 Fetched all logs:', logs);
@@ -174,31 +200,54 @@ export default function ReplayAttackDemo() {
     
     const initAuth = async () => {
       try {
-        // Check if token already exists
+        // Prefer secure session (real user) if available
+        const savedSession = localStorage.getItem('secure_user_session');
+        if (savedSession) {
+          try {
+            const parsed = JSON.parse(savedSession);
+            if (parsed?.token && parsed?.username) {
+              console.log('📌 Using secure session token for replay demo:', parsed.username);
+              setToken(parsed.token);
+              setSessionUser(parsed.username);
+              setTokenSource('session');
+              fetchServerLogs(parsed.token);
+              
+              interval = setInterval(() => {
+                fetchServerLogs(parsed.token);
+              }, 2000);
+              return;
+            }
+          } catch (parseErr) {
+            console.warn('Failed to parse secure_user_session for replay demo:', parseErr);
+          }
+        }
+
+        // Fall back to legacy demo token if still present
         const existingToken = localStorage.getItem('token');
         if (existingToken) {
-          console.log('📌 Using existing token from localStorage');
+          console.log('📌 Using legacy demo token from localStorage');
           setToken(existingToken);
+          setTokenSource('demo');
+          setSessionUser(mockUser.username);
           fetchServerLogs(existingToken);
-          
-          // Start refresh interval
           interval = setInterval(() => {
             fetchServerLogs(existingToken);
           }, 2000);
-        } else {
-          console.log('🔑 No token found, authenticating...');
-          const newToken = await authenticate();
-          if (newToken) {
-            console.log('✅ Authentication successful, starting log fetch...');
+          return;
+        }
+
+        console.log('🔑 No session token found, authenticating demo user...');
+        const newToken = await authenticate();
+        if (newToken) {
+          console.log('✅ Authentication successful, starting log fetch...');
+          fetchServerLogs(newToken);
+          
+          // Start refresh interval
+          interval = setInterval(() => {
             fetchServerLogs(newToken);
-            
-            // Start refresh interval
-            interval = setInterval(() => {
-              fetchServerLogs(newToken);
-            }, 2000);
-          } else {
-            console.error('❌ Failed to authenticate');
-          }
+          }, 2000);
+        } else {
+          console.error('❌ Failed to authenticate demo user');
         }
       } catch (err) {
         console.error('❌ Error in auth init:', err);
@@ -684,7 +733,7 @@ export default function ReplayAttackDemo() {
                   <h3 className="font-bold text-lg">Server Logs</h3>
                 </div>
                 <button
-                  onClick={fetchServerLogs}
+                  onClick={() => fetchServerLogs()}
                   disabled={logsLoading}
                   className="text-gray-400 hover:text-gray-300 disabled:text-gray-600 transition"
                   title="Refresh logs"
