@@ -97,7 +97,7 @@ export const fetchUsers = async (token) => {
  * Fetch specific user's public key
  * @param {string} username - Target username
  * @param {string} token - JWT token
- * @returns {Object|null} Public key in JWK format
+ * @returns {Object|null} { username, publicKey }
  */
 export const fetchUserPublicKey = async (username, token) => {
   try {
@@ -105,7 +105,7 @@ export const fetchUserPublicKey = async (username, token) => {
       headers: { Authorization: `Bearer ${token}` }
     });
     const data = await res.json();
-    if (res.ok) return data.publicKey;
+    if (res.ok) return data;
     return null;
   } catch (err) {
     console.error("Fetch public key failed", err);

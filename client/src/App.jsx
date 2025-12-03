@@ -3,7 +3,38 @@
  * Implements:
  * - Part 1: Cryptography (RSA-OAEP Key Generation)
  * - Part 2: Authentication (Bcrypt + JWT)
+ * - Part 3: CUSTOM KEY EXCHANGE PROTOCOL (ECDH + ECDSA + HKDF + Key Confirmation)
+ *   Located in: client/src/utils/crypto.js (Lines 434-894)
+ *   Functions: customKX_* (see below)
+ * - Part 4: End-to-End Encryption (AES-256-GCM)
+ * - Part 5: File Sharing & Encryption
+ * - Part 6: Replay Attack Protection (Nonce + Sequence Number)
+ * - Part 7: Security Logging & Audit Trail
  * - Part 8: Key Storage (IndexedDB)
+ * 
+ * CUSTOM KEY EXCHANGE PROTOCOL (Part Y):
+ * =====================================
+ * This application uses a custom authenticated ECDH key exchange protocol
+ * combining multiple cryptographic primitives:
+ * - ECDH (P-256): Ephemeral key agreement for forward secrecy
+ * - ECDSA (P-256): Digital signatures for MITM prevention
+ * - HKDF-SHA256: Key derivation for session keys
+ * - HMAC-SHA256: Key confirmation
+ * 
+ * Protocol Functions (imported from crypto.js):
+ * - customKX_generateEphemeralKeyPair(): Create ECDH keys for this session
+ * - customKX_generateLongTermSigningKeyPair(): Create ECDSA keys for user
+ * - customKX_signData(): Sign ephemeral keys with long-term key
+ * - customKX_verifySignature(): Verify peer's signed ephemeral keys
+ * - customKX_deriveSharedSecret(): ECDH shared secret computation
+ * - customKX_hkdfDeriveSessionKeys(): HKDF key expansion
+ * - customKX_computeKeyConfirmation(): HMAC key confirmation
+ * - customKX_verifyKeyConfirmation(): Verify peer's confirmation
+ * - customKX_performKeyExchange(): Full protocol orchestration
+ * 
+ * Integration Point: ChatWindow component calls this protocol during
+ * initializeSecureChat() to establish authenticated session keys before
+ * encrypting and sending messages.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -34,6 +65,7 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]); // List of all registered users
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
+  const [chatContext, setChatContext] = useState(null); // Active chat recipient + public key
   const [showChat, setShowChat] = useState(false); // Show chat window
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -88,8 +120,27 @@ export default function App() {
 
   // Handle user public key fetch
   const handleFetchPublicKey = async (username) => {
-    // Open chat window with selected user
-    setShowChat(true);
+    if (!user) return;
+    try {
+      const data = await fetchUserPublicKey(username, user.token);
+      if (!data?.publicKey) {
+        alert('Failed to fetch recipient public key. Please try again.');
+        return;
+      }
+
+      const recipientRecord = users.find((u) => u.username === username) 
+        || selectedUser 
+        || { username };
+
+      setChatContext({
+        recipient: recipientRecord,
+        publicKeyJwk: data.publicKey
+      });
+      setShowChat(true);
+    } catch (err) {
+      console.error('Failed to fetch recipient public key:', err);
+      alert('Could not start chat because the recipient key could not be loaded.');
+    }
   };
 
   // Dashboard data polling
@@ -166,12 +217,15 @@ export default function App() {
 
   // Handle Logout
   const handleLogout = () => {
-    logSecurityEvent("AUTH_LOGOUT", "User logged out manually", user.token);
+    if (user) {
+      logSecurityEvent("AUTH_LOGOUT", "User logged out manually", user.token);
+    }
     
     // Clear session from localStorage
     localStorage.removeItem('secure_user_session');
     
     setUser(null);
+    setChatContext(null);
     setView('login');
     setFormData({ username: '', password: '' });
   };
@@ -239,11 +293,15 @@ export default function App() {
       )}
 
       {/* Chat Window Modal */}
-      {showChat && selectedUser && (
+      {showChat && chatContext && (
         <ChatWindow 
           user={user}
-          recipient={selectedUser}
-          onClose={() => setShowChat(false)}
+          recipient={chatContext.recipient}
+          recipientPublicKeyJwk={chatContext.publicKeyJwk}
+          onClose={() => {
+            setShowChat(false);
+            setChatContext(null);
+          }}
         />
       )}
     </div>
