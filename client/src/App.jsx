@@ -55,6 +55,7 @@ import {
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
 import ReplayAttackDemo from './components/ReplayAttackDemo';
+import MitmAttackDemo from './components/MitmAttackDemo';
 import ChatWindow from './components/ChatWindow';
 
 export default function App() {
@@ -67,6 +68,7 @@ export default function App() {
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
   const [chatContext, setChatContext] = useState(null); // Active chat recipient + public key
   const [showChat, setShowChat] = useState(false); // Show chat window
+  const [mitmContext, setMitmContext] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -275,6 +277,15 @@ export default function App() {
           onSelectUser={setSelectedUser}
           onFetchPublicKey={handleFetchPublicKey}
           onShowReplayDemo={() => setView('replay-demo')}
+          onShowMitmDemo={() => {
+            if (!user) return;
+            setMitmContext({
+              victim: user.username,
+              attacker: selectedUser?.username || 'Any Registered User',
+              token: user.token
+            });
+            setView('mitm-demo');
+          }}
         />
       )}
 
@@ -290,6 +301,16 @@ export default function App() {
             <ReplayAttackDemo />
           </div>
         </div>
+      )}
+
+      {view === 'mitm-demo' && mitmContext && (
+        <MitmAttackDemo 
+          context={mitmContext}
+          onClose={() => {
+            setMitmContext(null);
+            setView('dashboard');
+          }} 
+        />
       )}
 
       {/* Chat Window Modal */}
