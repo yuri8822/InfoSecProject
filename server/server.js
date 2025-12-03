@@ -61,6 +61,12 @@ const messageSchema = new mongoose.Schema({
     nonce: { type: String, required: true }, // For replay attack protection
     timestamp: { type: Date, default: Date.now },
     sequenceNumber: { type: Number, required: true }, // For replay attack protection
+    sharedFile: { // Optional: file shared with this message
+        fileId: { type: String }, // Reference to File document
+        fileName: { type: String },
+        fileSize: { type: Number },
+        fileType: { type: String }
+    }
 });
 
 /**

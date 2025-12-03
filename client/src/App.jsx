@@ -23,12 +23,12 @@ import {
 // Components
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
+import ReplayAttackDemo from './components/ReplayAttackDemo';
+import MITMDemo from './components/MITMDemo';
 import ChatWindow from './components/ChatWindow';
-// PART 5: File Sharing Component
-import FileSharing from './components/FileSharing';
 
 export default function App() {
-  const [view, setView] = useState('login'); // login, register, dashboard
+  const [view, setView] = useState('login'); // login, register, dashboard, replay-demo, mitm-demo
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [user, setUser] = useState(null); // { token, username }
   const [keyStatus, setKeyStatus] = useState('checking'); // checking, present, missing
@@ -36,8 +36,6 @@ export default function App() {
   const [users, setUsers] = useState([]); // List of all registered users
   const [selectedUser, setSelectedUser] = useState(null); // Selected user for messaging
   const [showChat, setShowChat] = useState(false); // Show chat window
-  // PART 5: Tab management for dashboard
-  const [dashboardTab, setDashboardTab] = useState('overview'); // overview, files
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -212,51 +210,47 @@ export default function App() {
       )}
       
       {view === 'dashboard' && (
-        <div className="w-full flex flex-col">
-          {/* PART 5: Dashboard Tabs */}
-          <div className="mb-6 flex gap-2 border-b border-gray-200">
+        <Dashboard 
+          user={user}
+          keyStatus={keyStatus}
+          logs={logs}
+          users={users}
+          selectedUser={selectedUser}
+          onLogout={handleLogout}
+          onRefreshLogs={handleFetchLogs}
+          onRefreshUsers={handleFetchUsers}
+          onSelectUser={setSelectedUser}
+          onFetchPublicKey={handleFetchPublicKey}
+          onShowReplayDemo={() => setView('replay-demo')}
+          onShowMITMDemo={() => setView('mitm-demo')}
+        />
+      )}
+
+      {view === 'replay-demo' && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 z-50 overflow-y-auto">
+          <div className="relative">
             <button
-              onClick={() => setDashboardTab('overview')}
-              className={`px-4 py-3 font-medium transition-colors ${
-                dashboardTab === 'overview'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
-              }`}
+              onClick={() => setView('dashboard')}
+              className="fixed top-4 right-4 px-4 py-2 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 z-50"
             >
-              Overview & Chat
+              Back to Dashboard
             </button>
-            <button
-              onClick={() => setDashboardTab('files')}
-              className={`px-4 py-3 font-medium transition-colors ${
-                dashboardTab === 'files'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              🔒 File Sharing (E2EE)
-            </button>
+            <ReplayAttackDemo currentUser={user?.username} />
           </div>
+        </div>
+      )}
 
-          {/* Dashboard Overview Tab */}
-          {dashboardTab === 'overview' && (
-            <Dashboard 
-              user={user}
-              keyStatus={keyStatus}
-              logs={logs}
-              users={users}
-              selectedUser={selectedUser}
-              onLogout={handleLogout}
-              onRefreshLogs={handleFetchLogs}
-              onRefreshUsers={handleFetchUsers}
-              onSelectUser={setSelectedUser}
-              onFetchPublicKey={handleFetchPublicKey}
-            />
-          )}
-
-          {/* PART 5: File Sharing Tab */}
-          {dashboardTab === 'files' && (
-            <FileSharing user={user} />
-          )}
+      {view === 'mitm-demo' && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 z-50 overflow-y-auto">
+          <div className="relative">
+            <button
+              onClick={() => setView('dashboard')}
+              className="fixed top-4 right-4 px-4 py-2 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 z-50"
+            >
+              Back to Dashboard
+            </button>
+            <MITMDemo currentUser={user?.username} />
+          </div>
         </div>
       )}
 

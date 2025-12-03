@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Shield, Key, Terminal, LogOut, CheckCircle, AlertCircle } from 'lucide-react';
+import { Shield, Key, Terminal, LogOut, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 
 export default function Dashboard({ 
   user, 
@@ -16,7 +16,9 @@ export default function Dashboard({
   onRefreshLogs, 
   onRefreshUsers,
   onSelectUser,
-  onFetchPublicKey
+  onFetchPublicKey,
+  onShowReplayDemo,
+  onShowMITMDemo
 }) {
   return (
     <div className="w-full max-w-5xl space-y-6">
@@ -33,13 +35,35 @@ export default function Dashboard({
             </div>
           </div>
         </div>
-        <button 
-          onClick={onLogout}
-          className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
-        >
-          <LogOut size={18} />
-          Logout
-        </button>
+        <div className="flex items-center gap-2">
+          {onShowMITMDemo && (
+            <button 
+              onClick={onShowMITMDemo}
+              className="flex items-center gap-2 px-4 py-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+              title="Demonstrate MITM attack protection"
+            >
+              <AlertTriangle size={18} />
+              MITM Demo
+            </button>
+          )}
+          {onShowReplayDemo && (
+            <button 
+              onClick={onShowReplayDemo}
+              className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              title="Demonstrate replay attack protection"
+            >
+              <AlertTriangle size={18} />
+              Replay Demo
+            </button>
+          )}
+          <button 
+            onClick={onLogout}
+            className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
+          >
+            <LogOut size={18} />
+            Logout
+          </button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
