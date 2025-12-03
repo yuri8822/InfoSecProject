@@ -45,8 +45,7 @@ export default function MitmAttackDemo({ onClose, context }) {
   const [secureLogs, setSecureLogs] = useState([]);
   const [insecureStatus, setInsecureStatus] = useState('idle');
   const [secureStatus, setSecureStatus] = useState('idle');
-
-  // Always treat the signed-in user as the victim so the story matches the active session.
+    
   const victim = sessionUser?.username || context?.victim || 'Alice';
   const attackerName = context?.attacker || 'Any Registered User';
   const attackerLabel = 'Attacker';
@@ -260,19 +259,6 @@ export default function MitmAttackDemo({ onClose, context }) {
             </button>
             {renderLogs(secureLogs)}
           </div>
-        </section>
-
-        <section className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-sm text-indigo-900 space-y-2">
-          <h4 className="font-semibold flex items-center gap-2">
-            <ShieldCheck size={16} />
-            How to capture evidence
-          </h4>
-          <ul className="list-disc list-inside space-y-1">
-            <li>Run each simulation and take screenshots of the log panels.</li>
-            <li>Use the insecure log output as proof of a successful MITM compromise.</li>
-            <li>Use the signed log output showing signature verification failure as proof of prevention.</li>
-            <li>Attach the screenshots plus this log text in your report.</li>
-          </ul>
         </section>
       </div>
     </div>

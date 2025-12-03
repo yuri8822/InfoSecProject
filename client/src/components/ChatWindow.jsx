@@ -19,8 +19,6 @@ import {
   AlertCircle
 } from 'lucide-react';
 
-// CUSTOM KEY EXCHANGE PROTOCOL: Import cryptographic functions
-// These functions implement Part 3 of the assignment: Secure Key Exchange
 import { 
   encryptAES,
   decryptAES,
@@ -31,7 +29,7 @@ import {
   encryptAESKeyWithRSA,
   decryptAESKeyWithRSA,
   importPublicKey,
-  // REAL KEY EXCHANGE PROTOCOL FUNCTIONS
+  
   customKX_initiateKeyExchange,
   customKX_finalizeKeyExchange_initiator,
   customKX_respondToKeyExchange,
@@ -63,22 +61,18 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   
-  // Security status states (Part 2, 3, 4)
+
   const [securityStatus, setSecurityStatus] = useState({
-    step1_connection: 'pending',      // Part 2: Secure connection
-    step2_keyExchange: 'pending',     // Part 3: Key exchange
-    step3_encryption: 'pending',      // Part 4: Encryption ready
+    step1_connection: 'pending',     
+    step2_keyExchange: 'pending',    
+    step3_encryption: 'pending',      
   });
 
-  // CUSTOM KEY EXCHANGE PROTOCOL (Part Y): Session keys derived from ECDH
-  // Instead of RSA key encryption per message, we now use authenticated ECDH
-  // to derive a long-lived session key (AES-256-GCM) for all messages in this session
   const [sessionAesKey, setSessionAesKey] = useState(null);
   const [myPrivateKey, setMyPrivateKey] = useState(null);
   const [sequenceNumber, setSequenceNumber] = useState(0);
   const [recipientPublicKey, setRecipientPublicKey] = useState(null);
   
-  // PART 5: File sharing state in chat
   const [showFileShareModal, setShowFileShareModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileUploadProgress, setFileUploadProgress] = useState(0);
@@ -88,24 +82,51 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Initialize secure connection
   useEffect(() => {
     initializeSecureChat();
   }, []);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Poll for new messages
+  useEffect(() => {
+    if (!user || !recipient || sessionAesKey) return; // Already have session key
+    
+    const checkForSessionKeys = async () => {
+      try {
+        const { getEstablishedSessionKeys } = await import('../utils/keyExchangeState');
+        const storedKeys = getEstablishedSessionKeys(user.username, recipient.username);
+        if (storedKeys && storedKeys.aesKey) {
+          console.log('[CHAT] Found existing session keys, setting in state');
+          setSessionAesKey(storedKeys.aesKey);
+          setSecurityStatus(prev => ({ 
+            ...prev, 
+            step2_keyExchange: 'success', 
+            step3_encryption: 'success' 
+          }));
+          
+          // Load RSA private key for file sharing
+          const privKey = await getPrivateKey(user.username);
+          if (privKey) {
+            setMyPrivateKey(privKey);
+          }
+        }
+      } catch (err) {
+      }
+    };
+    
+    checkForSessionKeys();
+    const interval = setInterval(checkForSessionKeys, 2000);
+    return () => clearInterval(interval);
+  }, [user, recipient, sessionAesKey]);
+
   useEffect(() => {
     if (!sessionAesKey) return;
     const interval = setInterval(loadMessages, 3000);
     return () => clearInterval(interval);
   }, [sessionAesKey]);
 
-  // Background polling for incoming key exchange requests (responder side)
   useEffect(() => {
     if (!user) return;
     
@@ -117,7 +138,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
           return;
         }
         
-        // Fetch pending key exchanges
         const pending = await fetchPendingKeyExchanges(user.token);
         
         if (pending.length > 0) {
@@ -128,7 +148,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
           try {
             console.log(`[KX] Processing key exchange from ${pendingKX.initiator}, sessionId: ${pendingKX.sessionId}`);
             
-            // Fetch initiator's signing public key
             const initiatorSigningKeyData = await fetchUserSigningPublicKey(
               pendingKX.initiator,
               user.token
@@ -144,11 +163,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
               'ecdsa'
             );
             
-            // Respond to key exchange (use sessionId from pending exchange)
             const responseResult = await customKX_respondToKeyExchange(
               user.username,
               pendingKX.initiator,
-              pendingKX.sessionId, // Use the sessionId from the pending exchange
+              pendingKX.sessionId,
               pendingKX.kxHelloMsg,
               pendingKX.helloSignature,
               mySigningPrivateKey,
@@ -162,7 +180,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
             
             console.log(`[KX] Sending KX_RESPONSE for session ${pendingKX.sessionId}`);
             
-            // Send response to server
             await apiSendKXResponse(
               pendingKX.sessionId,
               responseResult.kxResponseMsg,
@@ -172,7 +189,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
             
             console.log(`[KX] KX_RESPONSE sent, waiting for confirmation...`);
             
-            // Poll for confirmation
             let confirmReceived = false;
             let confirmAttempts = 0;
             while (!confirmReceived && confirmAttempts < 10) {
@@ -183,7 +199,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
               if (confirmData.status === 'confirmed') {
                 console.log(`[KX] Confirmation received for session ${pendingKX.sessionId}`);
                 
-                // Finalize
                 const finalizeResult = await customKX_finalizeKeyExchange_responder(
                   pendingKX.sessionId,
                   confirmData.confirmTag,
@@ -191,7 +206,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
                 );
                 
                 if (finalizeResult.success) {
-                  // Store session keys
                   const { storeEstablishedSessionKeys } = await import('../utils/keyExchangeState');
                   storeEstablishedSessionKeys(
                     user.username,
@@ -202,11 +216,16 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
                   
                   console.log('[KX] ✓ Key exchange completed as responder');
                   
-                  // If this is for the current chat, update session key
                   if (recipient && recipient.username === pendingKX.initiator) {
                     setSessionAesKey(finalizeResult.aesKey);
                     setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'success', step3_encryption: 'success' }));
                     console.log('[KX] Session key updated for active chat');
+                    
+                    getPrivateKey(user.username).then(privKey => {
+                      if (privKey) {
+                        setMyPrivateKey(privKey);
+                      }
+                    }).catch(err => console.error('[KX] Failed to load private key:', err));
                   }
                 } else {
                   console.error('[KX] Finalization failed:', finalizeResult.reason);
@@ -232,10 +251,8 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       }
     };
     
-    // Poll every 3 seconds (more frequent for better responsiveness)
     const interval = setInterval(pollForIncomingKeyExchanges, 3000);
     
-    // Run immediately on mount
     pollForIncomingKeyExchanges();
     
     return () => clearInterval(interval);
@@ -243,7 +260,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
 
   const initializeSecureChat = async () => {
     try {
-      // Step 1: Verify secure connection (Part 2)
       setSecurityStatus(prev => ({ ...prev, step1_connection: 'loading' }));
       await new Promise(resolve => setTimeout(resolve, 500));
       setSecurityStatus(prev => ({ ...prev, step1_connection: 'success' }));
@@ -255,16 +271,30 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       const importedRecipientKey = await importPublicKey(recipientPublicKeyJwk);
       setRecipientPublicKey(importedRecipientKey);
 
-      // Step 2: REAL KEY EXCHANGE PROTOCOL
+      const { getEstablishedSessionKeys } = await import('../utils/keyExchangeState');
+      const existingKeys = getEstablishedSessionKeys(user.username, recipient.username);
+      
+      if (existingKeys && existingKeys.aesKey) {
+        console.log('[CHAT] Using existing session keys');
+        setSessionAesKey(existingKeys.aesKey);
+        setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'success', step3_encryption: 'success' }));
+        
+        const privKey = await getPrivateKey(user.username);
+        if (privKey) {
+          setMyPrivateKey(privKey);
+        }
+        
+        await loadMessages();
+        return;
+      }
+
       setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'loading' }));
       
-      // Get my signing private key
       const mySigningPrivateKey = await getSigningPrivateKey(user.username);
       if (!mySigningPrivateKey) {
         throw new Error('Signing private key not found. Please re-register.');
       }
       
-      // Fetch recipient's signing public key
       let recipientSigningKeyData;
       try {
         recipientSigningKeyData = await fetchUserSigningPublicKey(recipient.username, user.token);
@@ -281,7 +311,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         'ecdsa'
       );
       
-      // INITIATOR FLOW: Send KX_HELLO
       const initResult = await customKX_initiateKeyExchange(
         user.username,
         recipient.username,
@@ -292,11 +321,9 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         throw new Error(initResult.reason);
       }
       
-      // Use the sessionId returned from initiateKeyExchange (not a new one!)
       const sessionId = initResult.sessionId;
       console.log(`[KX] Initiator: Starting key exchange with sessionId: ${sessionId}`);
       
-      // Send KX_HELLO to server
       await sendKXHello(
         sessionId,
         initResult.kxHelloMsg,
@@ -307,7 +334,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       
       console.log(`[KX] Initiator: KX_HELLO sent, polling for KX_RESPONSE...`);
       
-      // Poll for KX_RESPONSE (with timeout)
       let responseReceived = false;
       let pollAttempts = 0;
       const maxPollAttempts = 30; // 30 attempts * 1 second = 30 seconds timeout
@@ -321,7 +347,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
           if (responseData.status === 'ready') {
             console.log(`[KX] Initiator: KX_RESPONSE received for session ${sessionId}`);
             
-            // Finalize key exchange
             const finalizeResult = await customKX_finalizeKeyExchange_initiator(
               sessionId,
               responseData.kxResponseMsg,
@@ -334,7 +359,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
             
             console.log(`[KX] Initiator: Sending KX_CONFIRM for session ${sessionId}`);
             
-            // Send confirmation
             await sendKXConfirm(
               sessionId,
               finalizeResult.confirmTag,
@@ -342,7 +366,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
               user.token
             );
             
-            // Store session AES key
             setSessionAesKey(finalizeResult.aesKey);
             responseReceived = true;
             console.log(`[KX] Initiator: ✓ Key exchange completed`);
@@ -361,7 +384,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         throw new Error(`Key exchange timeout - responder did not respond within ${maxPollAttempts} seconds`);
       }
       
-      // Also load RSA private key for file sharing
       const privKey = await getPrivateKey(user.username);
       if (!privKey) {
         throw new Error('Private key not found on this device');
@@ -376,12 +398,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       
       setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'success' }));
 
-      // Step 3: Encryption ready (Part 4)
       setSecurityStatus(prev => ({ ...prev, step3_encryption: 'loading' }));
       await new Promise(resolve => setTimeout(resolve, 300));
       setSecurityStatus(prev => ({ ...prev, step3_encryption: 'success' }));
 
-      // Load existing messages
       await loadMessages();
 
     } catch (err) {
@@ -400,7 +420,26 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
   };
 
   const loadMessages = async () => {
-    if (!sessionAesKey) return; // Wait for session key
+    let currentSessionKey = sessionAesKey;
+    
+    if (!currentSessionKey) {
+      try {
+        const { getEstablishedSessionKeys } = await import('../utils/keyExchangeState');
+        const storedKeys = getEstablishedSessionKeys(user.username, recipient.username);
+        if (storedKeys && storedKeys.aesKey) {
+          currentSessionKey = storedKeys.aesKey;
+          setSessionAesKey(storedKeys.aesKey);
+          console.log('[CHAT] Retrieved session key from keyExchangeState');
+        }
+      } catch (err) {
+        console.error('[CHAT] Failed to get session key from keyExchangeState:', err);
+      }
+    }
+    
+    if (!currentSessionKey) {
+      console.log('[CHAT] No session key available yet, skipping message load');
+      return;
+    }
     
     try {
       const encryptedMessages = await fetchMessages(recipient.username, user.token);
@@ -410,11 +449,8 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         encryptedMessages.map(async (msg) => {
           try {
             if (msg.to === user.username) {
-              // Message sent TO me
-              // Check if it uses session key or old RSA-wrapped key
-              if (msg.usesSessionKey && sessionAesKey) {
-                // Use session key
-                const plaintext = await decryptAES(msg.ciphertext, msg.iv, msg.authTag, sessionAesKey);
+              if (msg.usesSessionKey && currentSessionKey) {
+                const plaintext = await decryptAES(msg.ciphertext, msg.iv, msg.authTag, currentSessionKey);
                 
                 return {
                   ...msg,
@@ -422,7 +458,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
                   decryptionSuccess: true
                 };
               } else if (msg.encryptedSessionKey && myPrivateKey) {
-                // Fallback to old RSA-wrapped key (backward compatibility)
                 const aesKeyForMessage = await decryptAESKeyWithRSA(msg.encryptedSessionKey, myPrivateKey);
                 const plaintext = await decryptAES(msg.ciphertext, msg.iv, msg.authTag, aesKeyForMessage);
                 
@@ -435,7 +470,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
                 throw new Error('No decryption method available');
               }
             } else {
-              // Message sent BY me - retrieve from local cache
               const cachedPlaintext = sentMessagesCache[msg._id];
               
               return {
@@ -459,7 +493,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       
       setMessages(decryptedMessages);
       
-      // Update sequence number
       const myMessages = decryptedMessages.filter(m => m.from === user.username);
       if (myMessages.length > 0) {
         const maxSeq = Math.max(...myMessages.map(m => m.sequenceNumber));
@@ -473,10 +506,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    // Ensure we have a message and the recipient's RSA public key
     if (!newMessage.trim() || sending) return;
-    if (!recipientPublicKey) {
-      alert('Recipient public key not loaded yet. Please wait a moment and try again.');
+    
+    if (!sessionAesKey) {
+      alert('Session key not established. Please wait for key exchange to complete.');
       return;
     }
 
@@ -484,48 +517,40 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
     const messagePlaintext = newMessage.trim();
 
     try {
-      // Generate fresh AES-256 key per message (hybrid encryption with RSA key wrap)
-      const messageAesKey = await generateAESKey();
-      const { ciphertext, iv, authTag } = await encryptAES(messagePlaintext, messageAesKey);
-      const encryptedSessionKey = await encryptAESKeyWithRSA(messageAesKey, recipientPublicKey);
-
-      // Generate nonce for replay protection (still needed at message level)
+      const { ciphertext, iv, authTag } = await encryptAES(messagePlaintext, sessionAesKey);
+      
       const nonce = generateNonce();
 
-      // Prepare message payload
       const messagePayload = {
         to: recipient.username,
-        encryptedSessionKey,
+        encryptedSessionKey: '',
         ciphertext,
         iv,
         authTag,
         nonce,
         sequenceNumber,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        usesSessionKey: true
       };
 
-      // Include file metadata if a file was just shared
       if (window._pendingFileShare) {
         messagePayload.sharedFile = window._pendingFileShare;
         window._pendingFileShare = null;
       }
 
-      // Send encrypted message
       const response = await apiSendMessage(messagePayload, user.token);
 
       await logSecurityEvent(
-        'MESSAGE_ENCRYPTED_RSA_HYBRID',
-        `Message encrypted with AES-256 + RSA-wrapped key and sent to ${recipient.username}`,
+        'MESSAGE_ENCRYPTED_SESSION_KEY',
+        `Message encrypted with session AES key and sent to ${recipient.username}`,
         user.token
       );
 
-      // Store sent message plaintext locally (temporary cache)
       const messageId = response.messageId;
       const sentMessagesCache = JSON.parse(localStorage.getItem('sentMessages') || '{}');
       sentMessagesCache[messageId] = messagePlaintext;
       localStorage.setItem('sentMessages', JSON.stringify(sentMessagesCache));
 
-      // Clear input and reload messages
       setNewMessage('');
       setSelectedFile(null);
       setFileUploadProgress(0);
@@ -541,7 +566,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
     }
   };
 
-  // PART 5: Handle file sharing in chat
   const handleFileShareClick = () => {
     setShowFileShareModal(true);
   };
@@ -567,7 +591,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
     setFileUploadProgress(0);
 
     try {
-      // Encrypt file
       setFileShareStatus('Encrypting file (AES-256-GCM)...');
       setFileUploadProgress(30);
 
@@ -576,12 +599,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       setFileUploadProgress(60);
       setFileShareStatus('Uploading encrypted file...');
 
-      // Upload to server
       const result = await uploadEncryptedFile(fileMetadata, recipient.username, user.token);
 
       setFileUploadProgress(90);
 
-      // Log event
       await logFileSharingEvent(
         'FILE_SHARED_IN_CHAT',
         `Shared file "${selectedFile.name}" in chat with ${recipient.username}`,
@@ -591,7 +612,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       setFileUploadProgress(100);
       setFileShareStatus(`✅ File "${selectedFile.name}" ready to send!`);
 
-      // Store file info to include in message
       const fileInfo = {
         fileId: result.fileId,
         fileName: selectedFile.name,
@@ -599,14 +619,11 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         fileType: selectedFile.type
       };
 
-      // Create message with file attachment
       const fileMessage = `📁 [FILE] ${selectedFile.name} (${Math.round(selectedFile.size / 1024 / 1024)}MB)`;
       setNewMessage(fileMessage);
       
-      // Store file info temporarily so it can be sent with the message
       window._pendingFileShare = fileInfo;
 
-      // Auto-close modal and show file is ready
       setTimeout(() => {
         setShowFileShareModal(false);
         setFileShareStatus('Click Send to share the file!');
@@ -621,21 +638,17 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
     }
   };
 
-  // PART 6: Handle file download from chat
   const handleDownloadFile = async (fileMetadata) => {
     try {
       console.log('Downloading file:', fileMetadata);
       
-      // Get user's private key from IndexedDB
       const privateKey = await getPrivateKey(user.username);
       if (!privateKey) {
         throw new Error('Private key not found. Please log in again.');
       }
       
-      // Fetch encrypted file from server
       const encryptedFileData = await downloadEncryptedFile(fileMetadata.fileId, user.token);
       
-      // Decrypt file
       console.log('Decrypting file...');
       const decryptedArrayBuffer = await decryptFileFromSharing(encryptedFileData, privateKey);
       

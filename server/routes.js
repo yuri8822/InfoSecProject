@@ -25,7 +25,7 @@ const initialize = (userModel, auditLogModel, messageModel, fileModel, keyExchan
     createLog = createLogFn;
 };
 
-// --- ROUTES ---
+// ROUTES
 
 // 1. REGISTER
 router.post('/register', async (req, res) => {
@@ -96,9 +96,7 @@ router.post('/login', async (req, res) => {
 });
 
 // 3. LOG INGESTION (For Client-Side Security Events)
-// Clients hit this endpoint to report failed decryptions, replay attacks, etc.
 router.post('/log', async (req, res) => {
-    // Verify JWT if present (optional but recommended)
     const authHeader = req.headers['authorization'];
     let username = 'anonymous';
 
@@ -278,17 +276,7 @@ router.get('/messages/:otherUsername', async (req, res) => {
     }
 });
 
-/**
- * =====================================================
- * PART 5: END-TO-END ENCRYPTED FILE SHARING ROUTES
- * All file operations preserve end-to-end encryption
- * Server stores only encrypted data - cannot decrypt
- * =====================================================
- */
-
-// 9. UPLOAD ENCRYPTED FILE (Part 5)
-// Client sends pre-encrypted file chunks
-// Server stores them without access to encryption keys
+// 9. UPLOAD ENCRYPTED FILE
 router.post('/files/upload', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -309,14 +297,12 @@ router.post('/files/upload', async (req, res) => {
             recipientUsername
         } = req.body;
 
-        // Validate recipient exists
         const recipient = await User.findOne({ username: recipientUsername });
         if (!recipient) {
             await createLog(req, 'FILE_UPLOAD_FAIL', `Recipient ${recipientUsername} not found`, sender, 'warning');
             return res.status(404).json({ message: "Recipient not found" });
         }
 
-        // Create file document with encrypted chunks
         const fileDoc = new File({
             fileName,
             fileSize,
@@ -325,8 +311,8 @@ router.post('/files/upload', async (req, res) => {
             to: recipientUsername,
             totalChunks,
             chunkSize,
-            encryptedAESKey, // AES key encrypted with recipient's RSA public key
-            encryptedChunks // Array of encrypted chunks with IV and auth tags
+            encryptedAESKey,
+            encryptedChunks
         });
 
         await fileDoc.save();
@@ -346,9 +332,7 @@ router.post('/files/upload', async (req, res) => {
     }
 });
 
-// 10. GET SHARED FILES LIST (Part 5)
-// Returns list of files shared with the current user
-// All file content remains encrypted
+// 10. GET SHARED FILES LIST
 router.get('/files', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -358,7 +342,6 @@ router.get('/files', async (req, res) => {
         const decoded = jwt.verify(token, JWT_SECRET);
         const recipient = decoded.username;
 
-        // Fetch all files shared with this user
         const files = await File.find({ to: recipient }).select(
             'fileName fileSize fileType from uploadedAt isDownloaded totalChunks _id'
         ).sort({ uploadedAt: -1 });
@@ -373,9 +356,7 @@ router.get('/files', async (req, res) => {
     }
 });
 
-// 11. DOWNLOAD ENCRYPTED FILE (Part 5)
-// Returns fully encrypted file metadata and chunks
-// Client decrypts using their private key
+// 11. DOWNLOAD ENCRYPTED FILE
 router.get('/files/download/:fileId', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -386,27 +367,21 @@ router.get('/files/download/:fileId', async (req, res) => {
         const recipient = decoded.username;
         const fileId = req.params.fileId;
 
-        // Find file
         const file = await File.findById(fileId);
         if (!file) {
             await createLog(req, 'FILE_DOWNLOAD_FAIL', `File ${fileId} not found`, recipient, 'warning');
             return res.status(404).json({ message: "File not found" });
         }
 
-        // Verify recipient is authorized to download
         if (file.to !== recipient) {
             await createLog(req, 'FILE_DOWNLOAD_UNAUTHORIZED', `Unauthorized download attempt for file ${fileId} by ${recipient}`, recipient, 'warning');
             return res.status(403).json({ message: "Unauthorized to download this file" });
         }
 
-        // Increment download count and mark as downloaded
         file.downloads = (file.downloads || 0) + 1;
         file.isDownloaded = true;
         await file.save();
 
-        // Return encrypted file metadata and chunks
-        // Client will use their private key to decrypt the AES key
-        // Then use AES key to decrypt each chunk
         await createLog(req, 'FILE_DOWNLOADED', `File "${file.fileName}" downloaded by ${recipient}`, recipient, 'info');
 
         res.json({
@@ -416,8 +391,8 @@ router.get('/files/download/:fileId', async (req, res) => {
             from: file.from,
             totalChunks: file.totalChunks,
             chunkSize: file.chunkSize,
-            encryptedAESKey: file.encryptedAESKey, // Encrypted with recipient's RSA key
-            encryptedChunks: file.encryptedChunks, // Each chunk encrypted with AES-256-GCM
+            encryptedAESKey: file.encryptedAESKey,
+            encryptedChunks: file.encryptedChunks,
             uploadedAt: file.uploadedAt
         });
 
@@ -427,8 +402,7 @@ router.get('/files/download/:fileId', async (req, res) => {
     }
 });
 
-// 12. DELETE FILE (Part 5)
-// Only sender can delete shared files
+// 12. DELETE FILe
 router.delete('/files/:fileId', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -439,20 +413,17 @@ router.delete('/files/:fileId', async (req, res) => {
         const sender = decoded.username;
         const fileId = req.params.fileId;
 
-        // Find file
         const file = await File.findById(fileId);
         if (!file) {
             await createLog(req, 'FILE_DELETE_FAIL', `File ${fileId} not found`, sender, 'warning');
             return res.status(404).json({ message: "File not found" });
         }
 
-        // Verify sender is authorized to delete
         if (file.from !== sender) {
             await createLog(req, 'FILE_DELETE_UNAUTHORIZED', `Unauthorized delete attempt for file ${fileId} by ${sender}`, sender, 'warning');
             return res.status(403).json({ message: "Only sender can delete files" });
         }
 
-        // Delete file
         await File.findByIdAndDelete(fileId);
 
         await createLog(req, 'FILE_DELETED', `File "${file.fileName}" deleted by ${sender}`, sender, 'info');
@@ -465,14 +436,7 @@ router.delete('/files/:fileId', async (req, res) => {
     }
 });
 
-/**
- * =====================================================
- * PART 3: SECURE KEY EXCHANGE PROTOCOL ENDPOINTS
- * Handles KX_HELLO, KX_RESPONSE, KX_CONFIRM messages
- * =====================================================
- */
-
-// 13. SEND KX_HELLO (Initiator starts key exchange)
+// 13. SEND KX_HELLO
 router.post('/key-exchange/hello', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -488,14 +452,12 @@ router.post('/key-exchange/hello', async (req, res) => {
             return res.status(400).json({ message: "Missing required fields" });
         }
 
-        // Verify responder exists
         const responderUser = await User.findOne({ username: responder });
         if (!responderUser) {
             await createLog(req, 'KX_HELLO_FAIL', `Responder ${responder} not found`, initiator, 'warning');
             return res.status(404).json({ message: "Responder not found" });
         }
 
-        // Create or update session
         let session = await KeyExchangeSession.findOne({ sessionId });
         if (!session) {
             session = new KeyExchangeSession({
@@ -538,7 +500,7 @@ router.post('/key-exchange/hello', async (req, res) => {
     }
 });
 
-// 14. GET PENDING KX_HELLO (Responder polls for incoming key exchanges)
+// 14. GET PENDING KX_HELLO
 router.get('/key-exchange/pending', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -548,7 +510,6 @@ router.get('/key-exchange/pending', async (req, res) => {
         const decoded = jwt.verify(token, JWT_SECRET);
         const responder = decoded.username;
 
-        // Find pending key exchanges where this user is the responder
         const pendingSessions = await KeyExchangeSession.find({
             responder,
             status: 'hello_sent',
@@ -576,7 +537,7 @@ router.get('/key-exchange/pending', async (req, res) => {
     }
 });
 
-// 15. SEND KX_RESPONSE (Responder sends response)
+// 15. SEND KX_RESPONSE
 router.post('/key-exchange/response', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -592,7 +553,6 @@ router.post('/key-exchange/response', async (req, res) => {
             return res.status(400).json({ message: "Missing required fields" });
         }
 
-        // Find session
         const session = await KeyExchangeSession.findOne({ sessionId, responder });
         if (!session) {
             return res.status(404).json({ message: "Session not found" });
@@ -602,7 +562,6 @@ router.post('/key-exchange/response', async (req, res) => {
             return res.status(400).json({ message: "Invalid session status" });
         }
 
-        // Update session with response
         session.kxResponse = {
             id: kxResponseMsg.id,
             ephPub: kxResponseMsg.ephPub,
@@ -625,7 +584,7 @@ router.post('/key-exchange/response', async (req, res) => {
     }
 });
 
-// 16. GET KX_RESPONSE (Initiator polls for response)
+    // 16. GET KX_RESPONSE
 router.get('/key-exchange/response/:sessionId', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -642,7 +601,6 @@ router.get('/key-exchange/response/:sessionId', async (req, res) => {
         }
 
         if (session.status === 'hello_sent') {
-            // Response not ready yet
             return res.json({ status: 'pending' });
         }
 
@@ -667,7 +625,7 @@ router.get('/key-exchange/response/:sessionId', async (req, res) => {
     }
 });
 
-// 17. SEND KX_CONFIRM (Initiator sends confirmation)
+// 17. SEND KX_CONFIRM
 router.post('/key-exchange/confirm', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);
@@ -688,13 +646,12 @@ router.post('/key-exchange/confirm', async (req, res) => {
             return res.status(404).json({ message: "Session not found" });
         }
 
-        // Update session with confirmation
         session.kxConfirm = {
             confirmTag: confirmTag,
             from: sender
         };
         if (salt) {
-            session.salt = salt; // Store HKDF salt
+            session.salt = salt;
         }
         session.status = 'confirmed';
         session.completedAt = new Date();
@@ -710,7 +667,7 @@ router.post('/key-exchange/confirm', async (req, res) => {
     }
 });
 
-// 18. GET KX_CONFIRM (Responder polls for confirmation)
+    // 18. GET KX_CONFIRM
 router.get('/key-exchange/confirm/:sessionId', async (req, res) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader) return res.sendStatus(401);

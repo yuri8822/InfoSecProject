@@ -99,14 +99,10 @@ const fileSchema = new mongoose.Schema({
     isDownloaded: { type: Boolean, default: false } // Mark if recipient has downloaded
 });
 
-/**
- * Key Exchange Session Schema
- * Tracks key exchange protocol state between two users
- */
 const keyExchangeSessionSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, unique: true },
-    initiator: { type: String, required: true }, // Username of initiator
-    responder: { type: String, required: true }, // Username of responder
+    initiator: { type: String, required: true },
+    responder: { type: String, required: true },
     status: { 
         type: String, 
         enum: ['hello_sent', 'response_sent', 'confirmed', 'failed', 'expired'],
@@ -142,7 +138,6 @@ const Message = mongoose.model('Message', messageSchema);
 const File = mongoose.model('File', fileSchema);
 const KeyExchangeSession = mongoose.model('KeyExchangeSession', keyExchangeSessionSchema);
 
-// --- HELPER: LOGGING ---
 const createLog = async (req, type, details, username = null, severity = 'info') => {
     try {
         const ip = req.ip || req.connection.remoteAddress;
@@ -159,12 +154,8 @@ const createLog = async (req, type, details, username = null, severity = 'info')
     }
 };
 
-// Initialize routes with models and logging function
-// Pass File model for file sharing functionality (Part 5)
-// Pass KeyExchangeSession for key exchange protocol (Part 3)
 initializeRoutes(User, AuditLog, Message, File, KeyExchangeSession, createLog);
 
-// Mount API routes
 app.use('/api', apiRouter);
 
 app.listen(PORT, () => console.log(`Secure Server running on port ${PORT}`));

@@ -1,13 +1,6 @@
 /**
  * PART 5: End-to-End Encrypted File Sharing Component
  * Handles file upload and download with client-side encryption
- * 
- * Security Features:
- * - Files encrypted with AES-256-GCM client-side before upload
- * - Files split into chunks for efficient processing
- * - AES key encrypted with recipient's RSA public key
- * - Server stores only encrypted chunks - cannot decrypt
- * - Decryption happens exclusively on client-side
  */
 
 import React, { useState, useEffect } from 'react';
@@ -44,27 +37,22 @@ import {
 import { getPrivateKey } from '../utils/indexedDB';
 
 export default function FileSharing({ user }) {
-  // ============ FILE UPLOAD STATE ============
   const [selectedFile, setSelectedFile] = useState(null);
   const [recipientUsername, setRecipientUsername] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
 
-  // ============ FILE LIST STATE ============
   const [sharedFiles, setSharedFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloadingFileId, setDownloadingFileId] = useState(null);
 
-  // ============ STATUS & NOTIFICATIONS ============
   const [statusMessage, setStatusMessage] = useState('');
-  const [statusType, setStatusType] = useState(''); // 'success', 'error', 'info', 'loading'
+  const [statusType, setStatusType] = useState('');
 
-  // Initialize by loading shared files
   useEffect(() => {
     loadSharedFiles();
   }, []);
 
-  // ============ HELPER: Show status message ============
   const showStatus = (message, type = 'info', duration = 3000) => {
     setStatusMessage(message);
     setStatusType(type);
@@ -76,7 +64,6 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ LOAD SHARED FILES ============
   const loadSharedFiles = async () => {
     setLoadingFiles(true);
     try {
@@ -91,7 +78,6 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE UPLOAD ============
   const handleFileUpload = async (e) => {
     e.preventDefault();
 
@@ -109,7 +95,6 @@ export default function FileSharing({ user }) {
     setUploadProgress(0);
 
     try {
-      // Step 1: Fetch recipient's public key
       showStatus('Fetching recipient public key...', 'loading', false);
       const recipientPubKeyJWK = await fetchUserPublicKey(recipientUsername, user.token);
       if (!recipientPubKeyJWK) {
@@ -118,25 +103,21 @@ export default function FileSharing({ user }) {
 
       setUploadProgress(20);
 
-      // Step 2: Import recipient's public key
       showStatus('Importing recipient public key...', 'loading', false);
       const recipientPublicKey = await importPublicKey(recipientPubKeyJWK);
 
       setUploadProgress(30);
 
-      // Step 3: Encrypt file client-side
       showStatus('Encrypting file (AES-256-GCM) and splitting into chunks...', 'loading', false);
       const fileMetadata = await encryptFileForSharing(selectedFile, recipientPublicKey);
 
       setUploadProgress(60);
 
-      // Step 4: Upload encrypted file to server
       showStatus('Uploading encrypted file to server...', 'loading', false);
       const uploadResponse = await uploadEncryptedFile(fileMetadata, recipientUsername, user.token);
 
       setUploadProgress(90);
 
-      // Step 5: Log security event
       await logFileSharingEvent(
         'FILE_SHARED',
         `File "${selectedFile.name}" (${Math.round(selectedFile.size / 1024 / 1024)}MB) encrypted and shared with ${recipientUsername}`,
@@ -146,12 +127,10 @@ export default function FileSharing({ user }) {
       setUploadProgress(100);
       showStatus(`File "${selectedFile.name}" successfully encrypted and uploaded!`, 'success', 4000);
 
-      // Reset form
       setSelectedFile(null);
       setRecipientUsername('');
       setUploadProgress(0);
 
-      // Refresh file list
       setTimeout(() => loadSharedFiles(), 1000);
 
     } catch (err) {
@@ -163,27 +142,22 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE DOWNLOAD & DECRYPT ============
   const handleFileDownload = async (file) => {
     setDownloadingFileId(file._id);
 
     try {
-      // Step 1: Download encrypted file from server
       showStatus('Downloading encrypted file...', 'loading', false);
       const encryptedFileData = await downloadEncryptedFile(file._id, user.token);
 
-      // Step 2: Get user's private key
       showStatus('Retrieving your private key...', 'loading', false);
       const myPrivateKey = await getPrivateKey(user.username);
       if (!myPrivateKey) {
         throw new Error('Your private key not found on this device');
       }
 
-      // Step 3: Decrypt file client-side
       showStatus('Decrypting file (AES-256-GCM)...', 'loading', false);
       const decryptedBlob = await decryptFileFromSharing(encryptedFileData, myPrivateKey);
 
-      // Step 4: Create download link and trigger download
       const url = URL.createObjectURL(decryptedBlob);
       const link = document.createElement('a');
       link.href = url;
@@ -193,7 +167,6 @@ export default function FileSharing({ user }) {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      // Step 5: Log security event
       await logFileSharingEvent(
         'FILE_DOWNLOADED_DECRYPTED',
         `File "${file.fileName}" downloaded and decrypted successfully`,
@@ -202,7 +175,6 @@ export default function FileSharing({ user }) {
 
       showStatus(`File "${file.fileName}" decrypted and downloaded!`, 'success', 3000);
 
-      // Refresh file list
       setTimeout(() => loadSharedFiles(), 500);
 
     } catch (err) {
@@ -214,7 +186,6 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE DELETION ============
   const handleFileDelete = async (fileId, fileName) => {
     if (!confirm(`Delete file "${fileName}"? This action cannot be undone.`)) return;
 
@@ -237,7 +208,6 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ FORMAT FILE SIZE ============
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -246,7 +216,6 @@ export default function FileSharing({ user }) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
-  // ============ FORMAT DATE ============
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',
@@ -258,7 +227,6 @@ export default function FileSharing({ user }) {
 
   return (
     <div className="w-full max-w-5xl space-y-6">
-      {/* STATUS MESSAGE */}
       {statusMessage && (
         <div
           className={`p-4 rounded-lg border flex items-center gap-3 ${
@@ -283,8 +251,7 @@ export default function FileSharing({ user }) {
           <span className="text-sm font-medium">{statusMessage}</span>
         </div>
       )}
-
-      {/* UPLOAD SECTION */}
+  
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <div className="flex items-center gap-2 mb-6">
           <Lock className="text-blue-500" />

@@ -1,45 +1,6 @@
-/**
- * InfoSec Project - Main Application
- * Implements:
- * - Part 1: Cryptography (RSA-OAEP Key Generation)
- * - Part 2: Authentication (Bcrypt + JWT)
- * - Part 3: CUSTOM KEY EXCHANGE PROTOCOL (ECDH + ECDSA + HKDF + Key Confirmation)
- *   Located in: client/src/utils/crypto.js (Lines 434-894)
- *   Functions: customKX_* (see below)
- * - Part 4: End-to-End Encryption (AES-256-GCM)
- * - Part 5: File Sharing & Encryption
- * - Part 6: Replay Attack Protection (Nonce + Sequence Number)
- * - Part 7: Security Logging & Audit Trail
- * - Part 8: Key Storage (IndexedDB)
- * 
- * CUSTOM KEY EXCHANGE PROTOCOL (Part Y):
- * =====================================
- * This application uses a custom authenticated ECDH key exchange protocol
- * combining multiple cryptographic primitives:
- * - ECDH (P-256): Ephemeral key agreement for forward secrecy
- * - ECDSA (P-256): Digital signatures for MITM prevention
- * - HKDF-SHA256: Key derivation for session keys
- * - HMAC-SHA256: Key confirmation
- * 
- * Protocol Functions (imported from crypto.js):
- * - customKX_generateEphemeralKeyPair(): Create ECDH keys for this session
- * - customKX_generateLongTermSigningKeyPair(): Create ECDSA keys for user
- * - customKX_signData(): Sign ephemeral keys with long-term key
- * - customKX_verifySignature(): Verify peer's signed ephemeral keys
- * - customKX_deriveSharedSecret(): ECDH shared secret computation
- * - customKX_hkdfDeriveSessionKeys(): HKDF key expansion
- * - customKX_computeKeyConfirmation(): HMAC key confirmation
- * - customKX_verifyKeyConfirmation(): Verify peer's confirmation
- * - customKX_performKeyExchange(): Full protocol orchestration
- * 
- * Integration Point: ChatWindow component calls this protocol during
- * initializeSecureChat() to establish authenticated session keys before
- * encrypting and sending messages.
- */
 
 import React, { useState, useEffect } from 'react';
 
-// Utilities
 import { generateKeyPair, exportKey } from './utils/crypto';
 import { 
   customKX_generateLongTermSigningKeyPair, 
@@ -55,7 +16,6 @@ import {
   fetchUserPublicKey
 } from './utils/api';
 
-// Components
 import AuthForm from './components/AuthForm';
 import Dashboard from './components/Dashboard';
 import ReplayAttackDemo from './components/ReplayAttackDemo';
@@ -76,7 +36,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Check for existing session on page load
   useEffect(() => {
     const savedSession = localStorage.getItem('secure_user_session');
     if (savedSession) {
@@ -90,7 +49,6 @@ export default function App() {
     }
   }, []);
 
-  // Check key status when user logs in
   const checkKeyStatus = async () => {
     if (!user) return;
     try {
@@ -102,7 +60,6 @@ export default function App() {
     }
   };
 
-  // Fetch logs from server
   const handleFetchLogs = async () => {
     if (!user) return;
     try {
@@ -113,7 +70,6 @@ export default function App() {
     }
   };
 
-  // Fetch registered users
   const handleFetchUsers = async () => {
     if (!user) return;
     try {
@@ -124,7 +80,6 @@ export default function App() {
     }
   };
 
-  // Handle user public key fetch
   const handleFetchPublicKey = async (username) => {
     if (!user) return;
     try {
@@ -149,46 +104,36 @@ export default function App() {
     }
   };
 
-  // Dashboard data polling
   useEffect(() => {
     if (view === 'dashboard') {
       checkKeyStatus();
       handleFetchLogs();
       handleFetchUsers();
-      const interval = setInterval(handleFetchLogs, 5000); // Poll for logs every 5s
+      const interval = setInterval(handleFetchLogs, 5000);
       return () => clearInterval(interval);
     }
   }, [view, user]);
 
-  // Handle Registration
   const handleRegister = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      // 1. Generate RSA Keys (for file sharing and backward compatibility)
       const rsaKeyPair = await generateKeyPair();
       const rsaPublicKeyJwk = await exportKey(rsaKeyPair.publicKey);
 
-      // 2. Generate Long-Term ECDSA Signing Keys (for key exchange protocol)
       const ecdsaSigningKeyPair = await customKX_generateLongTermSigningKeyPair();
       const ecdsaPublicKeyJwk = await customKX_exportPublicKeyJwk(ecdsaSigningKeyPair.publicKey);
 
-      // 3. Register User + Both Public Keys on Server
       await registerUser(formData.username, formData.password, rsaPublicKeyJwk, ecdsaPublicKeyJwk);
 
-      // 4. Store Private Keys Securely
-      // RSA private key for file sharing
       await storePrivateKey(formData.username, rsaKeyPair.privateKey);
       
-      // ECDSA signing private key - store separately
       await storeSigningPrivateKey(formData.username, ecdsaSigningKeyPair.privateKey);
 
-      // 5. Store signing public key locally for quick access
       localStorage.setItem(`${formData.username}_signing_pub_jwk`, JSON.stringify(ecdsaPublicKeyJwk));
 
-      // 6. Success
       setView('login');
       alert("Registration successful! Keys stored securely.");
 
@@ -199,25 +144,20 @@ export default function App() {
     }
   };
 
-  // Handle Login
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      // Login via API (Part 2: Authentication)
       const data = await loginUser(formData.username, formData.password);
 
-      // Set user session
       const userData = { username: formData.username, token: data.token };
       
-      // Persist session to localStorage
       localStorage.setItem('secure_user_session', JSON.stringify(userData));
       
       setUser(userData);
       
-      // Verify Private Key Existence (Part 8: Key Storage)
       const privKey = await getPrivateKey(formData.username);
       if (!privKey) {
         logSecurityEvent("KEY_WARNING", "User logged in but private key missing from device", data.token);
@@ -232,13 +172,11 @@ export default function App() {
     }
   };
 
-  // Handle Logout
   const handleLogout = () => {
     if (user) {
       logSecurityEvent("AUTH_LOGOUT", "User logged out manually", user.token);
     }
     
-    // Clear session from localStorage
     localStorage.removeItem('secure_user_session');
     
     setUser(null);
@@ -247,7 +185,6 @@ export default function App() {
     setFormData({ username: '', password: '' });
   };
 
-  // Handle view switching
   const handleSwitchView = (newView) => {
     setError('');
     setView(newView);
@@ -327,8 +264,7 @@ export default function App() {
           }} 
         />
       )}
-
-      {/* Chat Window Modal */}
+  
       {showChat && chatContext && (
         <ChatWindow 
           user={user}

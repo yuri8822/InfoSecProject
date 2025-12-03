@@ -1,16 +1,6 @@
-/**
- * Part 2: Authentication & API Communication
- * All API calls and security event logging
- */
-
+  
 import { API_URL } from './config';
 
-/**
- * Log security event to server
- * @param {string} type - Event type
- * @param {string} details - Event details
- * @param {string|null} token - Optional JWT token
- */
 export const logSecurityEvent = async (type, details, token = null) => {
   try {
     const headers = { "Content-Type": "application/json" };
@@ -26,14 +16,6 @@ export const logSecurityEvent = async (type, details, token = null) => {
   }
 };
 
-/**
- * Register new user with public keys
- * @param {string} username - Username
- * @param {string} password - Password
- * @param {Object} publicKey - RSA public key in JWK format
- * @param {Object} longTermSigningPublicKey - ECDSA signing public key in JWK format
- * @returns {Object} Response data
- */
 export const registerUser = async (username, password, publicKey, longTermSigningPublicKey) => {
   const res = await fetch(`${API_URL}/register`, {
     method: "POST",
@@ -47,12 +29,6 @@ export const registerUser = async (username, password, publicKey, longTermSignin
   return data;
 };
 
-/**
- * Login user
- * @param {string} username - Username
- * @param {string} password - Password
- * @returns {Object} Response data with token
- */
 export const loginUser = async (username, password) => {
   const res = await fetch(`${API_URL}/login`, {
     method: "POST",
@@ -66,11 +42,6 @@ export const loginUser = async (username, password) => {
   return data;
 };
 
-/**
- * Fetch security audit logs
- * @param {string} token - JWT token
- * @returns {Array} List of logs
- */
 export const fetchLogs = async (token) => {
   const res = await fetch(`${API_URL}/logs`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -80,11 +51,6 @@ export const fetchLogs = async (token) => {
   return data;
 };
 
-/**
- * Fetch all registered users
- * @param {string} token - JWT token
- * @returns {Array} List of users
- */
 export const fetchUsers = async (token) => {
   const res = await fetch(`${API_URL}/users`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -94,12 +60,6 @@ export const fetchUsers = async (token) => {
   return data;
 };
 
-/**
- * Fetch specific user's public key
- * @param {string} username - Target username
- * @param {string} token - JWT token
- * @returns {Object|null} { username, publicKey }
- */
 export const fetchUserPublicKey = async (username, token) => {
   try {
     const res = await fetch(`${API_URL}/users/${username}/public-key`, {
@@ -114,12 +74,6 @@ export const fetchUserPublicKey = async (username, token) => {
   }
 };
 
-/**
- * Part 4: Send encrypted message
- * @param {Object} messageData - Message data with encryption fields
- * @param {string} token - JWT token
- * @returns {Object} Response data
- */
 export const sendMessage = async (messageData, token) => {
   const res = await fetch(`${API_URL}/messages`, {
     method: "POST",
@@ -136,12 +90,6 @@ export const sendMessage = async (messageData, token) => {
   return data;
 };
 
-/**
- * Fetch messages with another user
- * @param {string} otherUsername - Other user's username
- * @param {string} token - JWT token
- * @returns {Array} List of messages
- */
 export const fetchMessages = async (otherUsername, token) => {
   const res = await fetch(`${API_URL}/messages/${otherUsername}`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -151,21 +99,6 @@ export const fetchMessages = async (otherUsername, token) => {
   return data;
 };
 
-/**
- * =====================================================
- * PART 5: END-TO-END ENCRYPTED FILE SHARING API
- * Upload encrypted files, download, and manage shares
- * =====================================================
- */
-
-/**
- * Upload encrypted file to server
- * File is already encrypted client-side before upload
- * @param {Object} fileMetadata - Encrypted file metadata and chunks
- * @param {string} recipientUsername - Username of recipient
- * @param {string} token - JWT token
- * @returns {Object} Server response with file ID
- */
 export const uploadEncryptedFile = async (fileMetadata, recipientUsername, token) => {
   try {
     const res = await fetch(`${API_URL}/files/upload`, {
@@ -191,12 +124,6 @@ export const uploadEncryptedFile = async (fileMetadata, recipientUsername, token
   }
 };
 
-/**
- * Fetch list of files shared with current user
- * Returns encrypted metadata - decryption happens client-side
- * @param {string} token - JWT token
- * @returns {Array} List of shared files
- */
 export const fetchSharedFiles = async (token) => {
   try {
     const res = await fetch(`${API_URL}/files`, {
@@ -214,13 +141,6 @@ export const fetchSharedFiles = async (token) => {
   }
 };
 
-/**
- * Download encrypted file from server
- * Returns encrypted metadata that client decrypts
- * @param {string} fileId - File ID on server
- * @param {string} token - JWT token
- * @returns {Object} Encrypted file metadata
- */
 export const downloadEncryptedFile = async (fileId, token) => {
   try {
     const res = await fetch(`${API_URL}/files/download/${fileId}`, {
@@ -238,12 +158,6 @@ export const downloadEncryptedFile = async (fileId, token) => {
   }
 };
 
-/**
- * Delete shared file (sender only)
- * @param {string} fileId - File ID to delete
- * @param {string} token - JWT token
- * @returns {Object} Server response
- */
 export const deleteSharedFile = async (fileId, token) => {
   try {
     const res = await fetch(`${API_URL}/files/${fileId}`, {
@@ -262,12 +176,6 @@ export const deleteSharedFile = async (fileId, token) => {
   }
 };
 
-/**
- * Log file sharing event for security audit
- * @param {string} eventType - Type of event (e.g., 'FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_DELETE')
- * @param {string} details - Event details
- * @param {string} token - JWT token
- */
 export const logFileSharingEvent = async (eventType, details, token) => {
   try {
     await fetch(`${API_URL}/log`, {
@@ -287,16 +195,7 @@ export const logFileSharingEvent = async (eventType, details, token) => {
   }
 };
 
-/**
- * =====================================================
- * PART 3: KEY EXCHANGE PROTOCOL API FUNCTIONS
- * Network communication for key exchange messages
- * =====================================================
- */
 
-/**
- * Send KX_HELLO message to server
- */
 export const sendKXHello = async (sessionId, kxHelloMsg, helloSignature, responder, token) => {
     const res = await fetch(`${API_URL}/key-exchange/hello`, {
         method: "POST",
@@ -317,9 +216,6 @@ export const sendKXHello = async (sessionId, kxHelloMsg, helloSignature, respond
     return data;
 };
 
-/**
- * Poll for pending KX_HELLO messages (responder side)
- */
 export const fetchPendingKeyExchanges = async (token) => {
     const res = await fetch(`${API_URL}/key-exchange/pending`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -330,9 +226,6 @@ export const fetchPendingKeyExchanges = async (token) => {
     return data;
 };
 
-/**
- * Send KX_RESPONSE message to server
- */
 export const sendKXResponse = async (sessionId, kxResponseMsg, responseSignature, token) => {
     const res = await fetch(`${API_URL}/key-exchange/response`, {
         method: "POST",
@@ -352,9 +245,6 @@ export const sendKXResponse = async (sessionId, kxResponseMsg, responseSignature
     return data;
 };
 
-/**
- * Poll for KX_RESPONSE (initiator side)
- */
 export const fetchKXResponse = async (sessionId, token) => {
     const res = await fetch(`${API_URL}/key-exchange/response/${sessionId}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -365,9 +255,6 @@ export const fetchKXResponse = async (sessionId, token) => {
     return data;
 };
 
-/**
- * Send KX_CONFIRM message to server
- */
 export const sendKXConfirm = async (sessionId, confirmTag, salt, token) => {
     const res = await fetch(`${API_URL}/key-exchange/confirm`, {
         method: "POST",
@@ -387,9 +274,6 @@ export const sendKXConfirm = async (sessionId, confirmTag, salt, token) => {
     return data;
 };
 
-/**
- * Poll for KX_CONFIRM (responder side)
- */
 export const fetchKXConfirm = async (sessionId, token) => {
     const res = await fetch(`${API_URL}/key-exchange/confirm/${sessionId}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -400,9 +284,6 @@ export const fetchKXConfirm = async (sessionId, token) => {
     return data;
 };
 
-/**
- * Fetch user's long-term signing public key
- */
 export const fetchUserSigningPublicKey = async (username, token) => {
     const res = await fetch(`${API_URL}/users/${username}/signing-public-key`, {
         headers: { Authorization: `Bearer ${token}` }
