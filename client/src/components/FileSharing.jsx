@@ -1,14 +1,4 @@
-/**
- * PART 5: End-to-End Encrypted File Sharing Component
- * Handles file upload and download with client-side encryption
- * 
- * Security Features:
- * - Files encrypted with AES-256-GCM client-side before upload
- * - Files split into chunks for efficient processing
- * - AES key encrypted with recipient's RSA public key
- * - Server stores only encrypted chunks - cannot decrypt
- * - Decryption happens exclusively on client-side
- */
+//PART 5: End-to-End Encrypted File Sharing Component
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -44,18 +34,18 @@ import {
 import { getPrivateKey } from '../utils/indexedDB';
 
 export default function FileSharing({ user }) {
-  // ============ FILE UPLOAD STATE ============
+  // FILE UPLOAD STATE 
   const [selectedFile, setSelectedFile] = useState(null);
   const [recipientUsername, setRecipientUsername] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
 
-  // ============ FILE LIST STATE ============
+  //  FILE LIST STATE 
   const [sharedFiles, setSharedFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloadingFileId, setDownloadingFileId] = useState(null);
 
-  // ============ STATUS & NOTIFICATIONS ============
+  // STATUS & NOTIFICATIONS 
   const [statusMessage, setStatusMessage] = useState('');
   const [statusType, setStatusType] = useState(''); // 'success', 'error', 'info', 'loading'
 
@@ -64,7 +54,7 @@ export default function FileSharing({ user }) {
     loadSharedFiles();
   }, []);
 
-  // ============ HELPER: Show status message ============
+  // HELPER: Show status message
   const showStatus = (message, type = 'info', duration = 3000) => {
     setStatusMessage(message);
     setStatusType(type);
@@ -76,7 +66,7 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ LOAD SHARED FILES ============
+  //  LOAD SHARED FILES
   const loadSharedFiles = async () => {
     setLoadingFiles(true);
     try {
@@ -91,7 +81,7 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE UPLOAD ============
+  // HANDLE FILE UPLOAD 
   const handleFileUpload = async (e) => {
     e.preventDefault();
 
@@ -163,7 +153,7 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE DOWNLOAD & DECRYPT ============
+  // HANDLE FILE DOWNLOAD & DECRYPT 
   const handleFileDownload = async (file) => {
     setDownloadingFileId(file._id);
 
@@ -214,7 +204,7 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ HANDLE FILE DELETION ============
+  // HANDLE FILE DELETION 
   const handleFileDelete = async (fileId, fileName) => {
     if (!confirm(`Delete file "${fileName}"? This action cannot be undone.`)) return;
 
@@ -237,7 +227,7 @@ export default function FileSharing({ user }) {
     }
   };
 
-  // ============ FORMAT FILE SIZE ============
+  // FORMAT FILE SIZE 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -246,7 +236,7 @@ export default function FileSharing({ user }) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
-  // ============ FORMAT DATE ============
+  // FORMAT DATE 
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',

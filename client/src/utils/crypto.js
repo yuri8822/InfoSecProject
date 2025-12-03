@@ -430,45 +430,6 @@ export const decryptFileFromSharing = async (fileMetadata, myPrivateKey) => {
   }
 };
 
-/**
- * =====================================================================
- * PART Y: SECURE KEY EXCHANGE PROTOCOL (CUSTOM AUTHENTICATED ECDH)
- * 
- * This is a CUSTOM KEY EXCHANGE PROTOCOL designed specifically for this
- * InfoSec project. It is NOT a textbook copy.
- * 
- * Protocol Features:
- * ✓ Uses Elliptic Curve Diffie-Hellman (ECDH) on P-256 curve
- * ✓ Includes digital signatures (ECDSA) for authenticity
- * ✓ Prevents Man-in-the-Middle (MITM) attacks
- * ✓ Derives session keys using HKDF-SHA256
- * ✓ Implements final Key Confirmation message with HMAC
- * ✓ Provides transcript binding to prevent tampering
- * 
- * MESSAGE FLOW (Alice -> Bob):
- * 
- *   1. Alice sends KX_HELLO:
- *      { id: "alice", ephPub: {...}, longTermPub: {...}, nonce: "..." }
- *   
- *   2. Bob receives, validates long-term key
- *   
- *   3. Bob sends KX_RESPONSE:
- *      { id: "bob", ephPub: {...}, longTermPub: {...}, nonce: "..." }
- *   
- *   4. Both compute shared secret using ECDH
- *   
- *   5. Both derive session keys using HKDF(shared_secret)
- *      → aesKey (for encryption)
- *      → hmacKey (for confirmation)
- *   
- *   6. Alice sends KX_CONFIRM:
- *      { confirmTag: HMAC(transcript) }
- *   
- *   7. Bob verifies confirmation HMAC
- *   
- *   8. Session established! Both have identical session keys.
- * =====================================================================
- */
 
 /**
  * CUSTOM PROTOCOL - STEP 1: Generate ephemeral ECDH key pair (P-256)
@@ -702,10 +663,6 @@ export const customKX_verifyKeyConfirmation = async (hmacKey, transcriptBytes, p
 };
 
 /**
- * CUSTOM PROTOCOL - UTILITY: Construct message transcript
- * Concatenates all public values in a canonical form for signing/confirmation.
- * Prevents message reordering or substitution attacks.
- * 
  * @param {Object} message1 - First message object (KX_HELLO or KX_RESPONSE)
  * @param {Object} message2 - Second message object (KX_RESPONSE or null)
  * @returns {Uint8Array} Canonical transcript bytes
@@ -715,33 +672,22 @@ export const customKX_buildTranscript = (message1, message2 = null) => {
   return new TextEncoder().encode(transcript);
 };
 
-/**
- * =====================================================================
- * CUSTOM PROTOCOL - FULL KEY EXCHANGE ORCHESTRATION
- * 
- * This is the main entry point. It performs a complete authenticated
- * key exchange between two peers (Alice and Bob).
- * 
- * Returns detailed results for debugging and UI display.
- * =====================================================================
- */
+
 export const customKX_performKeyExchange = async (myUsername, peerUsername) => {
   try {
     console.log(`[CUSTOM KX] Initiating key exchange: ${myUsername} ↔ ${peerUsername}`);
     
-    // STEP 1: Generate my ephemeral and long-term keys
+  
     console.log('[CUSTOM KX] Step 1: Generating my ephemeral and long-term keys...');
     const myEphemeralKeypair = await customKX_generateEphemeralKeyPair();
     const mySigningKeypair = await customKX_generateLongTermSigningKeyPair();
     
-    // Export my public keys
+
     const myEphemeralPubJwk = await customKX_exportPublicKeyJwk(myEphemeralKeypair.publicKey);
     const mySigningPubJwk = await customKX_exportPublicKeyJwk(mySigningKeypair.publicKey);
     
-    // Generate nonce for this session (prevents replay)
     const myNonce = arrayBufferToBase64(window.crypto.getRandomValues(new Uint8Array(16)));
     
-    // STEP 2: Create KX_HELLO message to send to peer
     console.log('[CUSTOM KX] Step 2: Creating KX_HELLO message...');
     const kxHelloMsg = {
       id: myUsername,
@@ -750,16 +696,12 @@ export const customKX_performKeyExchange = async (myUsername, peerUsername) => {
       nonce: myNonce
     };
     
-    // Sign the KX_HELLO with my long-term private key
     const helloTranscript = customKX_buildTranscript(kxHelloMsg);
     const helloSignature = await customKX_signData(mySigningKeypair.privateKey, helloTranscript);
     
     console.log(`[CUSTOM KX] ✓ Created KX_HELLO with signature from ${myUsername}`);
     
-    // IN REAL SCENARIO: Send kxHelloMsg + helloSignature to peer via server
-    // For demo: we'll simulate peer response
-    
-    // STEP 3: Simulate receiving KX_RESPONSE from peer
+  
     console.log('[CUSTOM KX] Step 3: Simulating peer KX_RESPONSE...');
     const peerEphemeralKeypair = await customKX_generateEphemeralKeyPair();
     const peerSigningKeypair = await customKX_generateLongTermSigningKeyPair();

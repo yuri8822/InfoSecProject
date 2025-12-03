@@ -107,28 +107,11 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       const importedRecipientKey = await importPublicKey(recipientPublicKeyJwk);
       setRecipientPublicKey(importedRecipientKey);
 
-      // Step 2: CUSTOM KEY EXCHANGE PROTOCOL (Part 3 - Part Y) ✓ INTEGRATED
-      // ===========================================================
-      // This step now uses the authenticated ECDH key exchange protocol:
-      // - Initiator generates ephemeral + long-term keys
-      // - Creates KX_HELLO message with signed ephemeral public key
-      // - Server forwards KX_HELLO to responder
-      // - Responder creates KX_RESPONSE with signed ephemeral public key
-      // - Both derive shared secret via ECDH
-      // - Both derive session keys via HKDF-SHA256
-      // - Exchange HMAC key confirmation
-      // - Session established with authenticated session keys
-      //
-      // Note: In production, server endpoints (/api/kex/hello, /kex/response, etc.)
-      // would be required for real peer communication. This demo uses local simulation.
-      // ===========================================================
-      
+     
       setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'loading' }));
       
       console.log('[CHAT] Starting custom key exchange protocol...');
       
-      // CUSTOM PROTOCOL: Perform authenticated ECDH key exchange
-      // This returns session keys derived from ECDH + HKDF instead of RSA encryption
       const kxResult = await customKX_performKeyExchange(user.username, recipient.username);
       
       if (!kxResult.success) {
@@ -144,13 +127,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
         sessionKeyLength: kxResult.keys.myAesKey.length
       });
       
-      // CUSTOM PROTOCOL: Extract session keys from key exchange result
-      // These are the AES-256-GCM keys derived from HKDF(ECDH shared secret)
-      // We'll use these for encrypting all messages in this session
-      // Instead of generating new AES keys per message + RSA encryption
+     
       const base64KeyString = kxResult.keys.myAesKey;
       
-      // Convert base64 AES key back to CryptoKey for use in encryption
+      
       const aesKeyBuffer = Uint8Array.from(atob(base64KeyString), c => c.charCodeAt(0));
       const importedAesKey = await window.crypto.subtle.importKey(
         'raw',
@@ -162,7 +142,6 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       
       setSessionAesKey(importedAesKey);
       
-      // Also load my private key for backward compatibility (file sharing still uses RSA)
       const privKey = await getPrivateKey(user.username);
       if (!privKey) {
         throw new Error('Private key not found on this device');
@@ -176,12 +155,10 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
       );
       setSecurityStatus(prev => ({ ...prev, step2_keyExchange: 'success' }));
 
-      // Step 3: Encryption ready (Part 4)
       setSecurityStatus(prev => ({ ...prev, step3_encryption: 'loading' }));
       await new Promise(resolve => setTimeout(resolve, 300));
       setSecurityStatus(prev => ({ ...prev, step3_encryption: 'success' }));
 
-      // Load existing messages
       await loadMessages();
 
     } catch (err) {
@@ -200,21 +177,20 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
   };
 
   const loadMessages = async () => {
-    // Hybrid encryption: each message carries its own AES key encrypted via RSA
+  
     if (!myPrivateKey) return;
     
     try {
       const encryptedMessages = await fetchMessages(recipient.username, user.token);
       const sentMessagesCache = JSON.parse(localStorage.getItem('sentMessages') || '{}');
       
-      // Decrypt messages by unwrapping the embedded AES key per message
+     
       const decryptedMessages = await Promise.all(
         encryptedMessages.map(async (msg) => {
           try {
-            // CUSTOM PROTOCOL: Both initiator and responder derived identical session AES key
-            // via ECDH + HKDF, so both can decrypt messages with this key
+           
             if (msg.to === user.username) {
-              // This message was sent TO me
+              
               if (!msg.encryptedSessionKey) {
                 throw new Error('Missing encrypted session key on message');
               }
@@ -228,7 +204,7 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
                 decryptionSuccess: true
               };
             } else {
-              // This message was sent BY me - retrieve from local cache
+            
               const cachedPlaintext = sentMessagesCache[msg._id];
               
               return {
@@ -266,7 +242,7 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    // Ensure we have a message and the recipient's RSA public key
+
     if (!newMessage.trim() || sending) return;
     if (!recipientPublicKey) {
       alert('Recipient public key not loaded yet. Please wait a moment and try again.');
@@ -277,15 +253,15 @@ export default function ChatWindow({ user, recipient, recipientPublicKeyJwk, onC
     const messagePlaintext = newMessage.trim();
 
     try {
-      // Generate fresh AES-256 key per message (hybrid encryption with RSA key wrap)
+    
       const messageAesKey = await generateAESKey();
       const { ciphertext, iv, authTag } = await encryptAES(messagePlaintext, messageAesKey);
       const encryptedSessionKey = await encryptAESKeyWithRSA(messageAesKey, recipientPublicKey);
 
-      // Generate nonce for replay protection (still needed at message level)
+    
       const nonce = generateNonce();
 
-      // Prepare message payload
+    
       const messagePayload = {
         to: recipient.username,
         encryptedSessionKey,
